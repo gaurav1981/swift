@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2015 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -20,10 +20,13 @@
 #define SWIFT_DECLCONTEXT_H
 
 #include "swift/AST/Identifier.h"
+#include "swift/AST/LookupKinds.h"
+#include "swift/AST/ResilienceExpansion.h"
 #include "swift/AST/TypeAlignments.h"
 #include "swift/Basic/LLVM.h"
 #include "swift/Basic/SourceLoc.h"
 #include "swift/Basic/STLExtras.h"
+#include "llvm/ADT/PointerEmbeddedInt.h"
 #include "llvm/ADT/PointerIntPair.h"
 #include "llvm/ADT/PointerUnion.h"
 
@@ -33,6 +36,7 @@ namespace llvm {
 
 namespace swift {
   class AbstractFunctionDecl;
+  class GenericEnvironment;
   class ASTContext;
   class ASTWalker;
   class CanType;
@@ -52,6 +56,7 @@ namespace swift {
   class SourceFile;
   class Type;
   class ModuleDecl;
+  class GenericTypeDecl;
   class NominalTypeDecl;
   class ProtocolConformance;
   class ValueDecl;
@@ -61,18 +66,24 @@ namespace swift {
   class SerializedPatternBindingInitializer;
   class SerializedDefaultArgumentInitializer;
   class SerializedTopLevelCodeDecl;
+  class StructDecl;
 
-enum class DeclContextKind : uint8_t {
+namespace serialization {
+using DeclID = llvm::PointerEmbeddedInt<unsigned, 31>;
+}
+
+enum class DeclContextKind : unsigned {
   AbstractClosureExpr,
   Initializer,
   TopLevelCodeDecl,
+  SubscriptDecl,
   AbstractFunctionDecl,
   SerializedLocal,
   Last_LocalDeclContextKind = SerializedLocal,
 
   Module,
   FileUnit,
-  NominalTypeDecl,
+  GenericTypeDecl,
   ExtensionDecl,
   Last_DeclContextKind = ExtensionDecl
 };
@@ -109,8 +120,8 @@ enum class LocalDeclContextKind : uint8_t {
 ///
 /// The enumerators are ordered in terms of decreasing preference:
 /// an inherited conformance is best, followed by explicit
-/// conformances, then implied conformances. Earlier conformance
-/// kinds supersede later conformance kinds, possibly with a
+/// conformances, then synthesized and implied conformances. Earlier
+/// conformance kinds supersede later conformance kinds, possibly with a
 /// diagnostic (e.g., if an inherited conformance supersedes an
 /// explicit conformance).
 enum class ConformanceEntryKind : unsigned {
@@ -120,11 +131,11 @@ enum class ConformanceEntryKind : unsigned {
   /// Explicitly specified.
   Explicit,
 
-  /// Implied by an explicitly-specified conformance.
-  Implied,
-
   /// Implicitly synthesized.
   Synthesized,
+
+  /// Implied by an explicitly-specified conformance.
+  Implied,
 };
 
 /// Describes the kind of conformance lookup desired.
@@ -168,19 +179,24 @@ struct ConformanceDiagnostic {
 /// DeclContext, but a new brace statement is not.  There's no
 /// particular mandate for this, though.
 ///
-/// Note that DeclContexts have stricter alignment requirements than AST nodes
-/// in general, so if an AST node class multiply inherits from DeclContext
-/// and another base class, it must 'using DeclContext::operator new;' in order
-/// to use an allocator with the correct alignment.
+/// Please note that DeclContext assumes that it prefaces AST type hierarchies
+/// and therefore can safely access trailing memory. If you need to create a
+/// macro context, please see GenericContext for how to minimize new entries in
+/// the ASTHierarchy enum below.
 class alignas(1 << DeclContextAlignInBits) DeclContext {
-  
-  enum {
-    KindBits = DeclContextAlignInBits
+  enum class ASTHierarchy : unsigned {
+    Decl,
+    Expr,
+    FileUnit,
+    Initializer,
+    SerializedLocal,
+    // If you add a new AST hierarchies, then update the static_assert() below.
   };
-  static_assert(unsigned(DeclContextKind::Last_DeclContextKind) < 1U<<KindBits,
-                "Not enough KindBits for DeclContextKind");
-  
-  llvm::PointerIntPair<DeclContext*, KindBits, DeclContextKind> ParentAndKind;
+  static_assert(unsigned(ASTHierarchy::SerializedLocal) <
+                (1 << DeclContextAlignInBits),
+                "ASTHierarchy exceeds bits available");
+
+  llvm::PointerIntPair<DeclContext*, 3, ASTHierarchy> ParentAndKind;
 
   /// Change the parent of this context.  This should only be used
   /// very carefully.
@@ -192,19 +208,51 @@ class alignas(1 << DeclContextAlignInBits) DeclContext {
   template<class A, class B, class C>
   friend struct ::llvm::cast_convert_val;
   
+  // See swift/AST/Decl.h
   static DeclContext *castDeclToDeclContext(const Decl *D);
-  
+
+  /// If this DeclContext is a GenericType declaration or an
+  /// extension thereof, return the GenericTypeDecl.
+  GenericTypeDecl *getAsTypeOrTypeExtensionContext() const;
+
+  static ASTHierarchy getASTHierarchyFromKind(DeclContextKind Kind) {
+    switch (Kind) {
+    case DeclContextKind::AbstractClosureExpr:
+      return ASTHierarchy::Expr;
+    case DeclContextKind::Initializer:
+      return ASTHierarchy::Initializer;
+    case DeclContextKind::SerializedLocal:
+      return ASTHierarchy::SerializedLocal;
+    case DeclContextKind::FileUnit:
+      return ASTHierarchy::FileUnit;
+    case DeclContextKind::Module:
+    case DeclContextKind::TopLevelCodeDecl:
+    case DeclContextKind::AbstractFunctionDecl:
+    case DeclContextKind::SubscriptDecl:
+    case DeclContextKind::GenericTypeDecl:
+    case DeclContextKind::ExtensionDecl:
+      return ASTHierarchy::Decl;
+    }
+    llvm_unreachable("Unhandled DeclContextKind");
+  }
+
 public:
+  Decl *getAsDeclOrDeclExtensionContext() {
+    return ParentAndKind.getInt() == ASTHierarchy::Decl ?
+      reinterpret_cast<Decl*>(this + 1) : nullptr;
+  }
+  const Decl *getAsDeclOrDeclExtensionContext() const {
+    return const_cast<DeclContext*>(this)->getAsDeclOrDeclExtensionContext();
+  }
+
   DeclContext(DeclContextKind Kind, DeclContext *Parent)
-    : ParentAndKind(Parent, Kind) {
-    assert((Parent != 0 || isModuleContext()) &&
-           "DeclContext must have a parent unless it is a module!");
+      : ParentAndKind(Parent, getASTHierarchyFromKind(Kind)) {
+    if (Kind != DeclContextKind::Module)
+      assert(Parent != nullptr && "DeclContext must have a parent context");
   }
 
   /// Returns the kind of context this is.
-  DeclContextKind getContextKind() const {
-    return ParentAndKind.getInt();
-  }
+  DeclContextKind getContextKind() const;
   
   /// Determines whether this context is itself a local scope in a
   /// code block.  A context that appears in such a scope, like a
@@ -214,77 +262,93 @@ public:
   }
   
   /// isModuleContext - Return true if this is a subclass of Module.
-  bool isModuleContext() const {
-    return getContextKind() == DeclContextKind::Module;
-  }
+  bool isModuleContext() const; // see swift/AST/Module.h
 
   /// \returns true if this is a context with module-wide scope, e.g. a module
   /// or a source file.
-  bool isModuleScopeContext() const {
-    return getContextKind() == DeclContextKind::Module ||
-           getContextKind() == DeclContextKind::FileUnit;
-  }
+  bool isModuleScopeContext() const; // see swift/AST/Module.h
 
   /// \returns true if this is a type context, e.g., a struct, a class, an
   /// enum, a protocol, or an extension.
-  bool isTypeContext() const {
-    return getContextKind() == DeclContextKind::NominalTypeDecl ||
-           getContextKind() == DeclContextKind::ExtensionDecl;
-  }
+  bool isTypeContext() const;
 
   /// \brief Determine whether this is an extension context.
-  bool isExtensionContext() const {
-    return getContextKind() == DeclContextKind::ExtensionDecl;
-  }
+  bool isExtensionContext() const; // see swift/AST/Decl.h
 
-  /// If this DeclContext is a nominal type declaration or an
-  /// extension thereof, return the nominal type declaration.
-  NominalTypeDecl *isNominalTypeOrNominalTypeExtensionContext() const;
+  /// If this DeclContext is a NominalType declaration or an
+  /// extension thereof, return the NominalTypeDecl.
+  NominalTypeDecl *getAsNominalTypeOrNominalTypeExtensionContext() const;
 
   /// If this DeclContext is a class, or an extension on a class, return the
   /// ClassDecl, otherwise return null.
-  ClassDecl *isClassOrClassExtensionContext() const;
+  ClassDecl *getAsClassOrClassExtensionContext() const;
 
-  /// If this DeclContext is a enum, or an extension on a enum, return the
+  /// If this DeclContext is an enum, or an extension on an enum, return the
   /// EnumDecl, otherwise return null.
-  EnumDecl *isEnumOrEnumExtensionContext() const;
+  EnumDecl *getAsEnumOrEnumExtensionContext() const;
+
+  /// If this DeclContext is a struct, or an extension on a struct, return the
+  /// StructDecl, otherwise return null.
+  StructDecl *getAsStructOrStructExtensionContext() const;
 
   /// If this DeclContext is a protocol, or an extension on a
   /// protocol, return the ProtocolDecl, otherwise return null.
-  ProtocolDecl *isProtocolOrProtocolExtensionContext() const;
+  ProtocolDecl *getAsProtocolOrProtocolExtensionContext() const;
 
   /// If this DeclContext is a protocol extension, return the extended protocol.
-  ProtocolDecl *isProtocolExtensionContext() const;
+  ProtocolDecl *getAsProtocolExtensionContext() const;
 
   /// \brief Retrieve the generic parameter 'Self' from a protocol or
   /// protocol extension.
   ///
-  /// Only valid if \c isProtocolOrProtocolExtensionContext().
-  GenericTypeParamDecl *getProtocolSelf() const;
+  /// Only valid if \c getAsProtocolOrProtocolExtensionContext().
+  GenericTypeParamType *getProtocolSelfType() const;
 
-  /// getDeclaredTypeOfContext - For a type context, retrieves the declared
-  /// type of the context. Returns a null type for non-type contexts.
-  Type getDeclaredTypeOfContext() const;
-
-  /// getDeclaredTypeInContext - For a type context, retrieves the declared
-  /// type of the context as visible from within the context. Returns a null
-  /// type for non-type contexts.
+  /// Gets the type being declared by this context.
+  ///
+  /// - Generic types return a bound generic type using archetypes.
+  /// - Non-type contexts return a null type.
   Type getDeclaredTypeInContext() const;
   
-  /// getDeclaredInterfaceType - For a type context, retrieves the interface
-  /// type of the context as seen from outside the context. Returns a null
-  /// type for non-type contexts.
+  /// Gets the type being declared by this context.
+  ///
+  /// - Generic types return a bound generic type using interface types.
+  /// - Non-type contexts return a null type.
   Type getDeclaredInterfaceType() const;
 
-  /// \brief Retrieve the innermost generic parameters introduced by this
-  /// context or one of its parent contexts, or null if this context is not
-  /// directly dependent on any generic parameters.
+  /// Get the type of `self` in this context.
+  ///
+  /// - Protocol types return the `Self` archetype.
+  /// - Everything else falls back on getDeclaredTypeInContext().
+  Type getSelfTypeInContext() const;
+
+  /// Get the type of `self` in this context.
+  ///
+  /// - Protocol types return the `Self` interface type.
+  /// - Everything else falls back on getDeclaredInterfaceType().
+  Type getSelfInterfaceType() const;
+
+  /// \brief Retrieve the innermost generic parameters of this context or any
+  /// of its parents.
+  ///
+  /// FIXME: Remove this
   GenericParamList *getGenericParamsOfContext() const;
 
-  /// \brief Retrieve the interface generic type parameters and requirements
-  /// exposed by this context.
+  /// \brief Retrieve the innermost generic signature of this context or any
+  /// of its parents.
   GenericSignature *getGenericSignatureOfContext() const;
-  
+
+  /// \brief Retrieve the innermost archetypes of this context or any
+  /// of its parents.
+  GenericEnvironment *getGenericEnvironmentOfContext() const;
+
+  /// Whether the context has a generic environment that will be constructed
+  /// on first access (but has not yet been constructed).
+  bool contextHasLazyGenericEnvironment() const;
+
+  /// Map an interface type to a contextual type within this context.
+  Type mapTypeIntoContext(Type type) const;
+
   /// Returns this or the first local parent context, or nullptr if it is not
   /// contained in one.
   DeclContext *getLocalContext();
@@ -330,6 +394,9 @@ public:
     return ParentAndKind.getPointer();
   }
 
+  /// Returns the semantic parent for purposes of name lookup.
+  DeclContext *getParentForLookup() const;
+
   /// Return true if this is a child of the specified other decl context.
   bool isChildContextOf(const DeclContext *Other) const {
     if (this == Other) return false;
@@ -340,6 +407,10 @@ public:
         return true;
     return false;
   }
+
+  /// Compute a context C such that C is a parent context of A and B.
+  /// If no such context exists, return \c nullptr.
+  static DeclContext *getCommonParentContext(DeclContext *A, DeclContext *B);
 
   /// Returns the module context that contains this context.
   ModuleDecl *getParentModule() const;
@@ -359,6 +430,12 @@ public:
 
   /// Determine whether the innermost context is generic.
   bool isInnermostContextGeneric() const;
+
+  /// Get the most optimal resilience expansion for code in this context.
+  /// If the body is able to be inlined into functions in other resilience
+  /// domains, this ensures that only sufficiently-conservative access patterns
+  /// are used.
+  ResilienceExpansion getResilienceExpansion() const;
 
   /// Returns true if lookups within this context could affect downstream files.
   ///
@@ -391,9 +468,15 @@ public:
   /// lookup.
   ///
   /// \returns true if anything was found.
-  bool lookupQualified(Type type, DeclName member, unsigned options,
+  bool lookupQualified(Type type, DeclName member, NLOptions options,
                        LazyResolver *typeResolver,
                        SmallVectorImpl<ValueDecl *> &decls) const;
+
+  /// Look up all Objective-C methods with the given selector visible
+  /// in the enclosing module.
+  void lookupAllObjCMethods(
+         ObjCSelector selector,
+         SmallVectorImpl<AbstractFunctionDecl *> &results) const;
 
   /// Return the ASTContext for a specified DeclContext by
   /// walking up to the enclosing module and returning its ASTContext.
@@ -442,17 +525,30 @@ public:
                          = nullptr,
                        bool sorted = false) const;
 
+  /// Retrieve the syntactic depth of this declaration context, i.e.,
+  /// the number of non-module-scoped contexts.
+  ///
+  /// For an extension of a nested type, the extension is depth 1.
+  unsigned getSyntacticDepth() const;
+
+  /// Retrieve the semantic depth of this declaration context, i.e.,
+  /// the number of non-module-scoped contexts.
+  ///
+  /// For an extension of a nested type, the depth of the nested type itself
+  /// is also included.
+  unsigned getSemanticDepth() const;
+
   /// \returns true if traversal was aborted, false otherwise.
   bool walkContext(ASTWalker &Walker);
 
   void dumpContext() const;
   unsigned printContext(llvm::raw_ostream &OS, unsigned indent = 0) const;
-  
+
   // Only allow allocation of DeclContext using the allocator in ASTContext.
   void *operator new(size_t Bytes, ASTContext &C,
                      unsigned Alignment = alignof(DeclContext));
   
-  // Some Decls are DeclContexts, but not all.
+  // Some Decls are DeclContexts, but not all. See swift/AST/Decl.h
   static bool classof(const Decl *D);
 };
 
@@ -461,16 +557,19 @@ public:
 /// deserialization.
 class SerializedLocalDeclContext : public DeclContext {
 private:
-  const LocalDeclContextKind LocalKind;
+  unsigned LocalKind : 3;
+
+protected:
+  unsigned SpareBits : 29;
 
 public:
   SerializedLocalDeclContext(LocalDeclContextKind LocalKind,
                              DeclContext *Parent)
     : DeclContext(DeclContextKind::SerializedLocal, Parent),
-      LocalKind(LocalKind) {}
+      LocalKind(static_cast<unsigned>(LocalKind)) {}
 
   LocalDeclContextKind getLocalDeclContextKind() const {
-    return LocalKind;
+    return static_cast<LocalDeclContextKind>(LocalKind);
   }
 
   static bool classof(const DeclContext *DC) {
@@ -518,7 +617,7 @@ typedef IteratorRange<DeclIterator> DeclRange;
 
 /// The kind of an \c IterableDeclContext.
 enum class IterableDeclContextKind : uint8_t {  
-  NominalTypeDecl,
+  NominalTypeDecl = 0,
   ExtensionDecl,
 };
 
@@ -528,30 +627,35 @@ enum class IterableDeclContextKind : uint8_t {
 /// Note that an iterable declaration context must inherit from both
 /// \c IterableDeclContext and \c DeclContext.
 class IterableDeclContext {
-  /// The first declaration in this context.
-  mutable Decl *FirstDecl = nullptr;
+  enum LazyMembers : unsigned {
+    Present = 1 << 0,
+
+    /// Lazy member loading has a variety of feedback loops that need to
+    /// switch to pseudo-empty-member behaviour to avoid infinite recursion;
+    /// we use this flag to control them.
+    InProgress = 1 << 1,
+  };
+
+  /// The first declaration in this context along with a bit indicating whether
+  /// the members of this context will be lazily produced.
+  mutable llvm::PointerIntPair<Decl *, 2, LazyMembers> FirstDeclAndLazyMembers;
 
   /// The last declaration in this context, used for efficient insertion,
   /// along with the kind of iterable declaration context.
-  mutable llvm::PointerIntPair<Decl *, 2, IterableDeclContextKind> 
+  mutable llvm::PointerIntPair<Decl *, 1, IterableDeclContextKind>
     LastDeclAndKind;
 
-  /// Lazy member loader, if any.
-  ///
-  /// FIXME: Can we collapse this storage into something?
-  mutable LazyMemberLoader *LazyLoader = nullptr;
-
-  /// Lazy member loader context data.
-  uint64_t LazyLoaderContextData = 0;
-
-  /// Global declarations that were synthesized on this declaration's behalf,
-  /// such as default operator definitions derived for protocol conformances.
-  ArrayRef<Decl*> DerivedGlobalDecls;
+  /// The DeclID this IDC was deserialized from, if any. Used for named lazy
+  /// member loading, as a key when doing lookup in this IDC.
+  serialization::DeclID SerialID;
 
   template<class A, class B, class C>
   friend struct ::llvm::cast_convert_val;
 
   static IterableDeclContext *castDeclToIterableDeclContext(const Decl *D);
+
+  /// Retrieve the \c ASTContext in which this iterable context occurs.
+  ASTContext &getASTContext() const;
 
 public:
   IterableDeclContext(IterableDeclContextKind kind)
@@ -565,43 +669,56 @@ public:
   /// Retrieve the set of members in this context.
   DeclRange getMembers() const;
 
+  /// Retrieve the set of members in this context without loading any from the
+  /// associated lazy loader; this should only be used as part of implementing
+  /// abstractions on top of member loading, such as a name lookup table.
+  DeclRange getCurrentMembersWithoutLoading() const;
+
   /// Add a member to this context. If the hint decl is specified, the new decl
   /// is inserted immediately after the hint.
   void addMember(Decl *member, Decl *hint = nullptr);
 
-  /// Retrieve the lazy member loader.
-  LazyMemberLoader *getLoader() const {
-    assert(isLazy());
-    return LazyLoader;
-  }
-
-  /// Retrieve the context data for the lazy member loader.
-  uint64_t getLoaderContextData() const {
-    assert(isLazy());
-    return LazyLoaderContextData;
-  }
-
   /// Check whether there are lazily-loaded members.
-  bool isLazy() const {
-    return LazyLoader != nullptr;
-  }  
+  bool hasLazyMembers() const {
+    return FirstDeclAndLazyMembers.getInt() & LazyMembers::Present;
+  }
 
-  /// Set the loader for lazily-loaded members.
-  void setLoader(LazyMemberLoader *loader, uint64_t contextData);
+  bool isLoadingLazyMembers() {
+    return FirstDeclAndLazyMembers.getInt() & LazyMembers::InProgress;
+  }
+
+  void setLoadingLazyMembers(bool inProgress) {
+    LazyMembers status = FirstDeclAndLazyMembers.getInt();
+    if (inProgress)
+      status = LazyMembers(status | LazyMembers::InProgress);
+    else
+      status = LazyMembers(status & ~LazyMembers::InProgress);
+    FirstDeclAndLazyMembers.setInt(status);
+  }
+
+  /// Setup the loader for lazily-loaded members.
+  void setMemberLoader(LazyMemberLoader *loader, uint64_t contextData);
 
   /// Load all of the members of this context.
   void loadAllMembers() const;
 
-  /// Retrieve global declarations that were synthesized on this
-  /// declaration's behalf.
-  ArrayRef<Decl *> getDerivedGlobalDecls() const {
-    return DerivedGlobalDecls;
+  /// Determine whether this was deserialized (and thus SerialID is
+  /// valid).
+  bool wasDeserialized() const;
+
+  /// Return 'this' as a \c Decl.
+  const Decl *getDecl() const;
+
+  /// Get the DeclID this Decl was deserialized from.
+  serialization::DeclID getDeclID() const {
+    assert(wasDeserialized());
+    return SerialID;
   }
 
-  /// Set global declarations that were synthesized on this
-  /// declaration's behalf.
-  void setDerivedGlobalDecls(MutableArrayRef<Decl*> decls) {
-    DerivedGlobalDecls = decls;
+  /// Set the DeclID this Decl was deserialized from.
+  void setDeclID(serialization::DeclID d) {
+    assert(wasDeserialized());
+    SerialID = d;
   }
 
   // Some Decls are IterableDeclContexts, but not all.

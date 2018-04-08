@@ -1,17 +1,18 @@
-// RUN: %target-swift-frontend -emit-silgen %s | FileCheck %s
+
+// RUN: %target-swift-frontend -enable-sil-ownership -emit-silgen %s | %FileCheck %s
 
 infix operator ~> { precedence 255 associativity left }
 
 protocol P { }
 
-func bar<T:P>(inout _: T)() {}
-func baz<T:P>(inout _: T)(_:Int) {}
+func bar<T:P>(_: inout T) -> () -> () { return {_ in ()} }
+func baz<T:P>(_: inout T) -> (Int) -> () { return {_ in ()} }
 
 func ~> <T: P, Args, Result>(
-  inout x: T,
-  m: (inout x: T)->((Args)->Result)
-) -> (Args->Result) {
-  return m(x: &x)
+  x: inout T,
+  m: (_ x: inout T) -> ((Args) -> Result)
+) -> ((Args) -> Result) {
+  return m(&x)
 }
 
 struct X : P {}
@@ -19,7 +20,8 @@ struct X : P {}
 var a = X()
 (a~>bar)()
 
-// CHECK:  [[CHAINED_FUNC:%.*]] = apply {{%.*}}<X, (), ()>({{%.*}}, {{%.*}}) : $@convention(thin) <τ_0_0, τ_0_1, τ_0_2 where τ_0_0 : P> (@inout τ_0_0, @owned @callee_owned (@inout τ_0_0) -> @owned @callee_owned (@out τ_0_2, @in τ_0_1) -> ()) -> @owned @callee_owned (@out τ_0_2, @in τ_0_1) -> ()
-// CHECK:  [[REABSTRACT:%.*]] = function_ref @_TTRXFo_iT__iT__XFo__dT__
-// CHECK:  [[CHAINED_FUNC_REABSTRACTED:%.*]] = partial_apply [[REABSTRACT]]([[CHAINED_FUNC]])
-// CHECK:  apply [[CHAINED_FUNC_REABSTRACTED]]() : $@callee_owned () -> ()
+// CHECK:  [[CHAINED_FUNC:%.*]] = apply {{%.*}}<X, (), ()>({{%.*}}, {{%.*}}) : $@convention(thin) <τ_0_0, τ_0_1, τ_0_2 where τ_0_0 : P> (@inout τ_0_0, @noescape @callee_guaranteed (@inout τ_0_0) -> @owned @callee_guaranteed (@in_guaranteed τ_0_1) -> @out τ_0_2) -> @owned @callee_guaranteed (@in_guaranteed τ_0_1) -> @out τ_0_2
+// CHECK:  [[REABSTRACT:%.*]] = function_ref @$SytytIegnr_Ieg_TR
+// CHECK:  [[CHAINED_FUNC_REABSTRACTED:%.*]] = partial_apply [callee_guaranteed] [[REABSTRACT]]([[CHAINED_FUNC]])
+// CHECK:  [[BORROW:%.*]] = begin_borrow [[CHAINED_FUNC_REABSTRACTED]]
+// CHECK:  apply [[BORROW]]() : $@callee_guaranteed () -> ()

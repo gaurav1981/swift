@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2015 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -60,7 +60,7 @@ done:
 namespace {
 /// \brief Associates sourcekitd_uid_t to a UIdent.
 class SKUIDToUIDMap {
-  typedef llvm::DenseMap<sourcekitd_uid_t, UIdent> MapTy;
+  typedef llvm::DenseMap<void *, UIdent> MapTy;
   MapTy Map;
   WorkQueue Queue{ WorkQueue::Dequeuing::Concurrent, "UIDMap" };
 
@@ -209,16 +209,18 @@ std::string sourcekitd::getRuntimeLibPath() {
 }
 
 static void sourcekitdServer_peer_event_handler(xpc_connection_t peer,
-                                            xpc_object_t event) {
+                                                xpc_object_t event) {
   xpc_type_t type = xpc_get_type(event);
   if (type == XPC_TYPE_ERROR) {
     if (event == XPC_ERROR_CONNECTION_INVALID) {
       // The client process on the other end of the connection has either
       // crashed or cancelled the connection. After receiving this error,
       // the connection is in an invalid state, and we do not need to
-      // call xpc_connection_cancel(). Tear down any associated state
-      // here.
-      sourcekitd::shutdown();
+      // call xpc_connection_cancel().
+      // No need to call sourcekitd::shutdown() since the process is going down
+      // anyway, plus if we get a new connection before the process closes then
+      // we will fail to re-initialize properly since the initialize call is at
+      // main.
       xpc_transaction_end();
     } else if (event == XPC_ERROR_TERMINATION_IMMINENT) {
       // Handle per-connection termination cleanup.
@@ -289,7 +291,7 @@ static void getInitializationInfo(xpc_connection_t peer) {
   }
 
   if (TracingEnabled) {
-    SourceKit::trace::enable();
+    sourcekitd::trace::enableXPCTracing();
   }
 }
 
@@ -303,6 +305,10 @@ static void sourcekitdServer_event_handler(xpc_connection_t peer) {
     sourcekitdServer_peer_event_handler(peer, event);
   });
 
+  // Update the main connection
+  xpc_retain(peer);
+  if (MainConnection)
+    xpc_release(MainConnection);
   MainConnection = peer;
 
   // This will tell the connection to begin listening for events. If you
@@ -327,7 +333,6 @@ int main(int argc, const char *argv[]) {
   llvm::install_fatal_error_handler(fatal_error_handler, 0);
   sourcekitd::enableLogging("sourcekit-serv");
   sourcekitd::initialize();
-  sourcekitd::trace::initialize();
 
   // Increase the file descriptor limit.
   // FIXME: Portability ?
@@ -368,14 +373,9 @@ void SKUIDToUIDMap::set(sourcekitd_uid_t SKDUID, UIdent UID) {
 }
 
 void sourcekitd::trace::sendTraceMessage(trace::sourcekitd_trace_message_t Msg) {
-  if (!SourceKit::trace::enabled()) {
-    xpc_release(Msg);
-    return;
-  }
-
   xpc_connection_t Peer = MainConnection;
   if (!Peer) {
-    SourceKit::trace::disable();
+    trace::disableXPCTracing();
     xpc_release(Msg);
     return;
   }
@@ -397,7 +397,7 @@ void sourcekitd::trace::sendTraceMessage(trace::sourcekitd_trace_message_t Msg) 
   xpc_release(Message);
 
   if (xpc_get_type(Reply) == XPC_TYPE_ERROR) {
-    SourceKit::trace::disable();
+    trace::disableXPCTracing();
     xpc_release(Reply);
     return;
   }

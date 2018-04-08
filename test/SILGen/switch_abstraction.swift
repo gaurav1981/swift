@@ -1,4 +1,5 @@
-// RUN: %target-swift-frontend -emit-silgen -parse-stdlib %s | FileCheck %s
+
+// RUN: %target-swift-frontend -module-name switch_abstraction -emit-silgen -enable-sil-ownership -parse-stdlib %s | %FileCheck %s
 
 struct A {}
 
@@ -7,14 +8,14 @@ enum Optionable<T> {
   case Nuttn
 }
 
-// CHECK-LABEL: sil hidden @_TF18switch_abstraction18enum_reabstractionFT1xGOS_10OptionableFVS_1AS1__1aS1__T_ : $@convention(thin) (@owned Optionable<A -> A>, A) -> ()
-// CHECK: switch_enum {{%.*}} : $Optionable<A -> A>, case #Optionable.Summn!enumelt.1: [[DEST:bb[0-9]+]]
-// CHECK: [[DEST]]([[ORIG:%.*]] : $@callee_owned (@out A, @in A) -> ()):
-// CHECK:   [[REABSTRACT:%.*]] = function_ref @_TTR
-// CHECK:   [[SUBST:%.*]] = partial_apply [[REABSTRACT]]([[ORIG]])
-func enum_reabstraction(x x: Optionable<A -> A>, a: A) {
+// CHECK-LABEL: sil hidden @$S18switch_abstraction18enum_reabstraction1x1ayAA10OptionableOyAA1AVAHcG_AHtF : $@convention(thin) (@guaranteed Optionable<(A) -> A>, A) -> ()
+// CHECK: switch_enum {{%.*}} : $Optionable<(A) -> A>, case #Optionable.Summn!enumelt.1: [[DEST:bb[0-9]+]]
+// CHECK: [[DEST]]([[ORIG:%.*]] : @owned $@callee_guaranteed (@in_guaranteed A) -> @out A):
+// CHECK:   [[REABSTRACT:%.*]] = function_ref @$S{{.*}}TR :
+// CHECK:   [[SUBST:%.*]] = partial_apply [callee_guaranteed] [[REABSTRACT]]([[ORIG]])
+func enum_reabstraction(x x: Optionable<(A) -> A>, a: A) {
   switch x {
-  case .Summn(let f):
+  case .Summn(var f):
     f(a)
   case .Nuttn:
     ()
@@ -23,23 +24,23 @@ func enum_reabstraction(x x: Optionable<A -> A>, a: A) {
 
 enum Wacky<A, B> {
   case Foo(A)
-  case Bar(B -> A)
+  case Bar((B) -> A)
 }
 
-// CHECK-LABEL: sil hidden @_TF18switch_abstraction45enum_addr_only_to_loadable_with_reabstraction{{.*}} : $@convention(thin) <T> (@out T, @in Wacky<T, A>, A) -> () {
+// CHECK-LABEL: sil hidden @$S18switch_abstraction45enum_addr_only_to_loadable_with_reabstraction{{[_0-9a-zA-Z]*}}F : $@convention(thin) <T> (@in_guaranteed Wacky<T, A>, A) -> @out T {
 // CHECK: switch_enum_addr [[ENUM:%.*]] : $*Wacky<T, A>, {{.*}} case #Wacky.Bar!enumelt.1: [[DEST:bb[0-9]+]]
 // CHECK: [[DEST]]:
 // CHECK:   [[ORIG_ADDR:%.*]] = unchecked_take_enum_data_addr [[ENUM]] : $*Wacky<T, A>, #Wacky.Bar
-// CHECK:   [[ORIG:%.*]] = load [[ORIG_ADDR]]
-// CHECK:   [[REABSTRACT:%.*]] = function_ref @_TTR
-// CHECK:   [[SUBST:%.*]] = partial_apply [[REABSTRACT]]<T>([[ORIG]])
+// CHECK:   [[ORIG:%.*]] = load [take] [[ORIG_ADDR]]
+// CHECK:   [[REABSTRACT:%.*]] = function_ref @$S{{.*}}TR :
+// CHECK:   [[SUBST:%.*]] = partial_apply [callee_guaranteed] [[REABSTRACT]]<T>([[ORIG]])
 func enum_addr_only_to_loadable_with_reabstraction<T>(x x: Wacky<T, A>, a: A)
   -> T
 {
   switch x {
-  case .Foo(let b):
+  case .Foo(var b):
     return b
-  case .Bar(let f):
+  case .Bar(var f):
     return f(a)
   }
 }

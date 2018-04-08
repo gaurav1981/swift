@@ -1,71 +1,73 @@
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_SW_1 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_RESULTS < %t.enum.txt
-// RUN: FileCheck %s -check-prefix=FOO_ENUM_TYPE_CONTEXT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_RESULTS < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=FOO_ENUM_TYPE_CONTEXT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_SW_2 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_RESULTS < %t.enum.txt
-// RUN: FileCheck %s -check-prefix=FOO_ENUM_TYPE_CONTEXT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_RESULTS < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=FOO_ENUM_TYPE_CONTEXT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_SW_3 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_RESULTS < %t.enum.txt
-// RUN: FileCheck %s -check-prefix=BAR_ENUM_TYPE_CONTEXT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_RESULTS < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=BAR_ENUM_TYPE_CONTEXT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_SW_4 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_RESULTS < %t.enum.txt
-// RUN: FileCheck %s -check-prefix=BAZ_ENUM_TYPE_CONTEXT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_RESULTS < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=BAZ_ENUM_TYPE_CONTEXT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_SW_5 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_RESULTS < %t.enum.txt
-// RUN: FileCheck %s -check-prefix=QUX_ENUM_TYPE_CONTEXT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_RESULTS < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=QUX_ENUM_TYPE_CONTEXT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_SW_WITH_DOT_1 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=FOO_ENUM_DOT_ELEMENTS < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=FOO_ENUM_DOT_ELEMENTS < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_SW_WITH_QUAL_1 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=FOO_ENUM_DOT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=FOO_ENUM_DOT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_SW_EXPR_ERROR_1 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=FOO_ENUM_DOT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=FOO_ENUM_DOT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_SW_IN_PATTERN_1 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=WITH_GLOBAL_RESULTS < %t.enum.txt
-// RUN: FileCheck %s -check-prefix=ENUM_SW_IN_PATTERN_1 < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=WITH_GLOBAL_RESULTS < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=ENUM_SW_IN_PATTERN_1 < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_SW_IN_PATTERN_2 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=ENUM_SW_IN_PATTERN_2 < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=ENUM_SW_IN_PATTERN_2 < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_QUAL_NO_DOT_1 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=FOO_ENUM_NO_DOT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=FOO_ENUM_NO_DOT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_QUAL_NO_DOT_2 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=BAR_ENUM_NO_DOT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=BAR_ENUM_NO_DOT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_QUAL_NO_DOT_3 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=BAZ_INT_ENUM_NO_DOT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=BAZ_INT_ENUM_NO_DOT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_QUAL_NO_DOT_4 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=BAZ_T_ENUM_NO_DOT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=BAZ_T_ENUM_NO_DOT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_QUAL_NO_DOT_5 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=QUX_ENUM_NO_DOT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=QUX_ENUM_NO_DOT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_QUAL_DOT_1 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=FOO_ENUM_DOT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=FOO_ENUM_DOT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_QUAL_DOT_2 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=BAR_ENUM_DOT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=BAR_ENUM_DOT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_QUAL_DOT_3 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=BAZ_INT_ENUM_DOT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=BAZ_INT_ENUM_DOT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_QUAL_DOT_4 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=BAZ_T_ENUM_DOT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=BAZ_T_ENUM_DOT < %t.enum.txt
 
 // RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=ENUM_QUAL_DOT_5 > %t.enum.txt
-// RUN: FileCheck %s -check-prefix=QUX_ENUM_DOT < %t.enum.txt
+// RUN: %FileCheck %s -check-prefix=QUX_ENUM_DOT < %t.enum.txt
 
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=WITH_INVALID_DOT_1 | FileCheck %s -check-prefix=WITH_INVALID_DOT
-// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=UNRESOLVED_1 | FileCheck %s -check-prefix=UNRESOLVED_1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=WITH_INVALID_DOT_1 | %FileCheck %s -check-prefix=WITH_INVALID_DOT
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=UNRESOLVED_1 | %FileCheck %s -check-prefix=UNRESOLVED_1
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=UNRESOLVED_2 | %FileCheck %s -check-prefix=UNRESOLVED_2
+// RUN: %target-swift-ide-test -code-completion -source-filename %s -code-completion-token=UNRESOLVED_3 | %FileCheck %s -check-prefix=UNRESOLVED_3
 
 //===---
 //===--- Test that we can complete enum elements.
@@ -73,7 +75,7 @@
 
 //===--- Helper types.
 
-enum FooEnum {
+enum FooEnum: CaseIterable {
   case Foo1
   case Foo2
 }
@@ -86,11 +88,15 @@ enum FooEnum {
 // FOO_ENUM_NO_DOT: Begin completions
 // FOO_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal: .Foo1[#FooEnum#]{{; name=.+$}}
 // FOO_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal: .Foo2[#FooEnum#]{{; name=.+$}}
+// FOO_ENUM_NO_DOT-NEXT: Decl[TypeAlias]/CurrNominal: .AllCases[#[FooEnum]#]{{; name=.+$}}
+// FOO_ENUM_NO_DOT-NEXT: Decl[StaticVar]/CurrNominal: .allCases[#[FooEnum]#]{{; name=.+$}}
 // FOO_ENUM_NO_DOT-NEXT: End completions
 
 // FOO_ENUM_DOT: Begin completions
 // FOO_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal: Foo1[#FooEnum#]{{; name=.+$}}
 // FOO_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal: Foo2[#FooEnum#]{{; name=.+$}}
+// FOO_ENUM_DOT-NEXT: Decl[TypeAlias]/CurrNominal: AllCases[#[FooEnum]#]{{; name=.+$}}
+// FOO_ENUM_DOT-NEXT: Decl[StaticVar]/CurrNominal: allCases[#[FooEnum]#]{{; name=.+$}}
 // FOO_ENUM_DOT-NEXT: End completions
 
 // FOO_ENUM_DOT_ELEMENTS: Begin completions, 2 items
@@ -122,51 +128,51 @@ enum BarEnum {
 // BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar1[#BarEnum#]{{; name=.+$}}
 // BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar2()[#() -> BarEnum#]{{; name=.+$}}
 // BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar3({#Int#})[#(Int) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar4({#a: Int#}, {#b: Float#})[#(a: Int, b: Float) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar6({#a: Int#}, {#Float#})[#(a: Int, b: (Float)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar6({#a: Int#}, {#Float#})[#(a: Int, b: (Float)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar7({#a: Int#}, ({#b: Float#}, {#c: Double#}))[#(a: Int, (b: Float, c: Double)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar8({#a: Int#}, b: ({#c: Float#}, {#d: Double#}))[#(a: Int, b: (c: Float, d: Double)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar4({#a: Int#}, {#b: Float#})[#(Int, Float) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar5({#a: Int#}, {#(Float)#})[#(Int, (Float)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar6({#a: Int#}, {#b: (Float)#})[#(Int, (Float)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar7({#a: Int#}, {#(b: Float, c: Double)#})[#(Int, (b: Float, c: Double)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar8({#a: Int#}, {#b: (c: Float, d: Double)#})[#(Int, (c: Float, d: Double)) -> BarEnum#]{{; name=.+$}}
 // BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar9({#Int#})[#(Int) -> BarEnum#]{{; name=.+$}}
 // BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar10({#Int#}, {#Float#})[#(Int, Float) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar11({#Int#}, {#Float#})[#(Int, (Float)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar12({#Int#}, ({#Float#}, {#Double#}))[#(Int, (Float, Double)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar11({#Int#}, {#(Float)#})[#(Int, (Float)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_TYPE_CONTEXT-DAG: Decl[EnumElement]/ExprSpecific: .Bar12({#Int#}, {#(Float, Double)#})[#(Int, (Float, Double)) -> BarEnum#]{{; name=.+$}}
 // BAR_ENUM_TYPE_CONTEXT: End completions
 
 // BAR_ENUM_NO_DOT: Begin completions
-// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Bar1[#BarEnum#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Bar2()[#() -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Bar3({#Int#})[#(Int) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Bar4({#a: Int#}, {#b: Float#})[#(a: Int, b: Float) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Bar5({#a: Int#}, {#Float#})[#(a: Int, (Float)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Bar6({#a: Int#}, {#Float#})[#(a: Int, b: (Float)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Bar7({#a: Int#}, ({#b: Float#}, {#c: Double#}))[#(a: Int, (b: Float, c: Double)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Bar8({#a: Int#}, b: ({#c: Float#}, {#d: Double#}))[#(a: Int, b: (c: Float, d: Double)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Bar9({#Int#})[#(Int) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Bar10({#Int#}, {#Float#})[#(Int, Float) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Bar11({#Int#}, {#Float#})[#(Int, (Float)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Bar12({#Int#}, ({#Float#}, {#Double#}))[#(Int, (Float, Double)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[InstanceMethod]/CurrNominal: .barInstanceFunc({#self: &BarEnum#})[#() -> Void#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[StaticVar]/CurrNominal:      .staticVar[#Int#]{{; name=.+$}}
-// BAR_ENUM_NO_DOT-NEXT: Decl[StaticMethod]/CurrNominal:   .barStaticFunc()[#Void#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:      .Bar1[#BarEnum#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:      .Bar2()[#() -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:      .Bar3({#Int#})[#(Int) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:      .Bar4({#a: Int#}, {#b: Float#})[#(Int, Float) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:      .Bar5({#a: Int#}, {#(Float)#})[#(Int, (Float)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:      .Bar6({#a: Int#}, {#b: (Float)#})[#(Int, (Float)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:      .Bar7({#a: Int#}, {#(b: Float, c: Double)#})[#(Int, (b: Float, c: Double)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:      .Bar8({#a: Int#}, {#b: (c: Float, d: Double)#})[#(Int, (c: Float, d: Double)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:      .Bar9({#Int#})[#(Int) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:      .Bar10({#Int#}, {#Float#})[#(Int, Float) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:      .Bar11({#Int#}, {#(Float)#})[#(Int, (Float)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:      .Bar12({#Int#}, {#(Float, Double)#})[#(Int, (Float, Double)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[InstanceMethod]/CurrNominal:   .barInstanceFunc({#self: &BarEnum#})[#() -> Void#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[StaticVar]/CurrNominal:        .staticVar[#Int#]{{; name=.+$}}
+// BAR_ENUM_NO_DOT-NEXT: Decl[StaticMethod]/CurrNominal:     .barStaticFunc()[#Void#]{{; name=.+$}}
 // BAR_ENUM_NO_DOT-NEXT: End completions
 
 // BAR_ENUM_DOT: Begin completions
-// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Bar1[#BarEnum#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Bar2()[#() -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Bar3({#Int#})[#(Int) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Bar4({#a: Int#}, {#b: Float#})[#(a: Int, b: Float) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Bar5({#a: Int#}, {#Float#})[#(a: Int, (Float)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Bar6({#a: Int#}, {#Float#})[#(a: Int, b: (Float)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Bar7({#a: Int#}, ({#b: Float#}, {#c: Double#}))[#(a: Int, (b: Float, c: Double)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Bar8({#a: Int#}, b: ({#c: Float#}, {#d: Double#}))[#(a: Int, b: (c: Float, d: Double)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Bar9({#Int#})[#(Int) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Bar10({#Int#}, {#Float#})[#(Int, Float) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Bar11({#Int#}, {#Float#})[#(Int, (Float)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Bar12({#Int#}, ({#Float#}, {#Double#}))[#(Int, (Float, Double)) -> BarEnum#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[InstanceMethod]/CurrNominal/TypeRelation[Invalid]: barInstanceFunc({#self: &BarEnum#})[#() -> Void#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[StaticVar]/CurrNominal:      staticVar[#Int#]{{; name=.+$}}
-// BAR_ENUM_DOT-NEXT: Decl[StaticMethod]/CurrNominal/TypeRelation[Invalid]:   barStaticFunc()[#Void#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:      Bar1[#BarEnum#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:      Bar2()[#() -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:      Bar3({#Int#})[#(Int) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:      Bar4({#a: Int#}, {#b: Float#})[#(Int, Float) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:      Bar5({#a: Int#}, {#(Float)#})[#(Int, (Float)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:      Bar6({#a: Int#}, {#b: (Float)#})[#(Int, (Float)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:      Bar7({#a: Int#}, {#(b: Float, c: Double)#})[#(Int, (b: Float, c: Double)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:      Bar8({#a: Int#}, {#b: (c: Float, d: Double)#})[#(Int, (c: Float, d: Double)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:      Bar9({#Int#})[#(Int) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:      Bar10({#Int#}, {#Float#})[#(Int, Float) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:      Bar11({#Int#}, {#(Float)#})[#(Int, (Float)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:      Bar12({#Int#}, {#(Float, Double)#})[#(Int, (Float, Double)) -> BarEnum#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[InstanceMethod]/CurrNominal/NotRecommended/TypeRelation[Invalid]: barInstanceFunc({#self: &BarEnum#})[#() -> Void#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[StaticVar]/CurrNominal:        staticVar[#Int#]{{; name=.+$}}
+// BAR_ENUM_DOT-NEXT: Decl[StaticMethod]/CurrNominal/NotRecommended/TypeRelation[Invalid]: barStaticFunc()[#Void#]{{; name=.+$}}
 // BAR_ENUM_DOT-NEXT: End completions
 
 enum BazEnum<T> {
@@ -197,28 +203,27 @@ enum BazEnum<T> {
 // BAZ_T_ENUM_NO_DOT: Begin completions
 // BAZ_T_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Baz1[#BazEnum<T>#]{{; name=.+$}}
 // BAZ_T_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Baz2({#T#})[#(T) -> BazEnum<T>#]{{; name=.+$}}
-// BAZ_T_ENUM_NO_DOT-NEXT: Decl[InstanceMethod]/CurrNominal: .bazInstanceFunc({#self: &BazEnum<T>#})[#() -> Void#]{{; name=.+$}}
+// BAZ_T_ENUM_NO_DOT-NEXT: Decl[InstanceMethod]/CurrNominal: .bazInstanceFunc({#self: &BazEnum<_>#})[#() -> Void#]{{; name=.+$}}
 // BAZ_T_ENUM_NO_DOT-NEXT: Decl[StaticVar]/CurrNominal:      .staticVar[#Int#]{{; name=.+$}}
-// BAZ_T_ENUM_NO_DOT-NEXT: Decl[StaticVar]/CurrNominal:      .staticVarT[#T#]{{; name=.+$}}
+// BAZ_T_ENUM_NO_DOT-NEXT: Decl[StaticVar]/CurrNominal:      .staticVarT[#_#]{{; name=.+$}}
 // BAZ_T_ENUM_NO_DOT-NEXT: Decl[StaticMethod]/CurrNominal:   .bazStaticFunc()[#Void#]{{; name=.+$}}
-// BAZ_T_ENUM_NO_DOT-NEXT: Decl[InfixOperatorFunction]/OtherModule[Swift]: != {#Any.Type?#}[#Bool#]
 // BAZ_T_ENUM_NO_DOT-NEXT: End completions
 
 // BAZ_INT_ENUM_DOT: Begin completions, 6 items
 // BAZ_INT_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Baz1[#BazEnum<T>#]{{; name=.+$}}
 // BAZ_INT_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Baz2({#T#})[#(T) -> BazEnum<T>#]{{; name=.+$}}
-// BAZ_INT_ENUM_DOT-NEXT: Decl[InstanceMethod]/CurrNominal/TypeRelation[Invalid]: bazInstanceFunc({#self: &BazEnum<Int>#})[#() -> Void#]{{; name=.+$}}
+// BAZ_INT_ENUM_DOT-NEXT: Decl[InstanceMethod]/CurrNominal/NotRecommended/TypeRelation[Invalid]: bazInstanceFunc({#self: &BazEnum<Int>#})[#() -> Void#]{{; name=.+$}}
 // BAZ_INT_ENUM_DOT-NEXT: Decl[StaticVar]/CurrNominal:      staticVar[#Int#]{{; name=.+$}}
 // BAZ_INT_ENUM_DOT-NEXT: Decl[StaticVar]/CurrNominal:      staticVarT[#Int#]{{; name=.+$}}
-// BAZ_INT_ENUM_DOT-NEXT: Decl[StaticMethod]/CurrNominal/TypeRelation[Invalid]:   bazStaticFunc()[#Void#]{{; name=.+$}}
+// BAZ_INT_ENUM_DOT-NEXT: Decl[StaticMethod]/CurrNominal/NotRecommended/TypeRelation[Invalid]:   bazStaticFunc()[#Void#]{{; name=.+$}}
 // BAZ_INT_ENUM_DOT-NEXT: End completions
 
 // BAZ_T_ENUM_DOT: Begin completions, 6 items
 // BAZ_T_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Baz1[#BazEnum<T>#]{{; name=.+$}}
 // BAZ_T_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Baz2({#T#})[#(T) -> BazEnum<T>#]{{; name=.+$}}
-// BAZ_T_ENUM_DOT-NEXT: Decl[InstanceMethod]/CurrNominal: bazInstanceFunc({#self: &BazEnum<T>#})[#() -> Void#]{{; name=.+$}}
+// BAZ_T_ENUM_DOT-NEXT: Decl[InstanceMethod]/CurrNominal: bazInstanceFunc({#self: &BazEnum<_>#})[#() -> Void#]{{; name=.+$}}
 // BAZ_T_ENUM_DOT-NEXT: Decl[StaticVar]/CurrNominal:      staticVar[#Int#]{{; name=.+$}}
-// BAZ_T_ENUM_DOT-NEXT: Decl[StaticVar]/CurrNominal:      staticVarT[#T#]{{; name=.+$}}
+// BAZ_T_ENUM_DOT-NEXT: Decl[StaticVar]/CurrNominal:      staticVarT[#_#]{{; name=.+$}}
 // BAZ_T_ENUM_DOT-NEXT: Decl[StaticMethod]/CurrNominal:   bazStaticFunc()[#Void#]{{; name=.+$}}
 // BAZ_T_ENUM_DOT-NEXT: End completions
 
@@ -235,15 +240,15 @@ enum QuxEnum : Int {
 // QUX_ENUM_NO_DOT: Begin completions, 4 items
 // QUX_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Qux1[#QuxEnum#]{{; name=.+$}}
 // QUX_ENUM_NO_DOT-NEXT: Decl[EnumElement]/CurrNominal:    .Qux2[#QuxEnum#]{{; name=.+$}}
-// QUX_ENUM_NO_DOT-NEXT: Decl[Constructor]/CurrNominal:   ({#rawValue: Int#})[#QuxEnum?#]{{; name=.+$}}
-// QUX_ENUM_NO_DOT-NEXT: Decl[TypeAlias]/Super:            .RawValue[#Int#]{{; name=.+$}}
+// QUX_ENUM_NO_DOT-NEXT: Decl[TypeAlias]/CurrNominal:      .RawValue[#Int#]{{; name=.+$}}
+// QUX_ENUM_NO_DOT-NEXT: Decl[Constructor]/CurrNominal:    ({#rawValue: Int#})[#QuxEnum?#]{{; name=.+$}}
 // QUX_ENUM_NO_DOT-NEXT: End completions
 
 // QUX_ENUM_DOT: Begin completions, 4 items
 // QUX_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Qux1[#QuxEnum#]{{; name=.+$}}
 // QUX_ENUM_DOT-NEXT: Decl[EnumElement]/CurrNominal:    Qux2[#QuxEnum#]{{; name=.+$}}
-// QUX_ENUM_DOT-NEXT: Decl[Constructor]/CurrNominal: init({#rawValue: Int#})[#QuxEnum?#]{{; name=.+$}}
-// QUX_ENUM_DOT-NEXT: Decl[TypeAlias]/Super:            RawValue[#Int#]{{; name=.+$}}
+// QUX_ENUM_DOT-NEXT: Decl[TypeAlias]/CurrNominal:      RawValue[#Int#]{{; name=.+$}}
+// QUX_ENUM_DOT-NEXT: Decl[Constructor]/CurrNominal:    init({#rawValue: Int#})[#QuxEnum?#]{{; name=.+$}}
 // QUX_ENUM_DOT-NEXT: End completions
 
 func freeFunc() {}
@@ -377,4 +382,17 @@ func testWithInvalid1() {
 // UNRESOLVED_1-DAG:  Decl[EnumElement]/ExprSpecific:     Qux1[#QuxEnum#]; name=Qux1
 // UNRESOLVED_1-DAG:  Decl[EnumElement]/ExprSpecific:     Qux2[#QuxEnum#]; name=Qux2
 // UNRESOLVED_1-NOT:  Okay
+}
+
+func testUnqualified1(x: QuxEnum) {
+  _ = x == .Qux1 || x == .#^UNRESOLVED_2^#Qux2
+  // UNRESOLVED_2: Begin completions, 2 items
+  // UNRESOLVED_2-DAG: Decl[EnumElement]/ExprSpecific:     Qux1[#QuxEnum#]; name=Qux1
+  // UNRESOLVED_2-DAG: Decl[EnumElement]/ExprSpecific:     Qux2[#QuxEnum#]; name=Qux2
+  // UNRESOLVED_2: End completions
+
+  _ = (x == .Qux1#^UNRESOLVED_3^#)
+  // UNRESOLVED_3: Begin completions
+  // UNRESOLVED_3: End completions
+
 }

@@ -1,6 +1,7 @@
-// RUN: %target-parse-verify-swift
+// RUN: %target-typecheck-verify-swift
 
 // REQUIRES: objc_interop
+import Foundation
 
 @IBOutlet // expected-error {{only instance properties can be declared @IBOutlet}} {{1-11=}}
 var iboutlet_global: Int
@@ -21,7 +22,7 @@ class IBOutletWrapperTy {
   @IBOutlet
   class var staticValue: IBOutletWrapperTy = 52  // expected-error {{cannot convert value of type 'Int' to specified type 'IBOutletWrapperTy'}}
   // expected-error@-2 {{only instance properties can be declared @IBOutlet}} {{3-12=}}
-  // expected-error@-2 {{class stored properties not yet supported}}
+  // expected-error@-2 {{class stored properties not supported}}
 
   @IBOutlet // expected-error {{@IBOutlet may only be used on 'var' declarations}} {{3-13=}}
   func click() -> () {}
@@ -62,6 +63,10 @@ class NonObjC {}
   // AnyObject
   @IBOutlet var outlet5: AnyObject?
   @IBOutlet var outlet6: AnyObject!
+
+  // Any
+  @IBOutlet var outlet5a: Any?
+  @IBOutlet var outlet6a: Any!
 
   // Protocol types
   @IBOutlet var outlet7: P1 // expected-error{{@IBOutlet property cannot have non-'@objc' protocol type 'P1'}} {{3-13=}}
@@ -121,8 +126,8 @@ class NonObjC {}
   @IBOutlet var collection4b: ([CP1])? // expected-error{{@IBOutlet property cannot be an array of non-'@objc' protocol type}} {{3-13=}}
   @IBOutlet var collection4c: ([CP1])! // expected-error{{@IBOutlet property cannot be an array of non-'@objc' protocol type}} {{3-13=}}
 
-  @IBOutlet var collection5b: ([String])?  // expected-error {{property cannot be marked @IBOutlet because its type cannot be represented in Objective-C}}
-  @IBOutlet var collection5c: ([String])!  // expected-error {{property cannot be marked @IBOutlet because its type cannot be represented in Objective-C}}
+  @IBOutlet var collection5b: ([String])?
+  @IBOutlet var collection5c: ([String])!
 
   @IBOutlet var collection6a: [NonObjC] // expected-error{{@IBOutlet property cannot be an array of non-'@objc' class type}} {{3-13=}}
   @IBOutlet var collection6b: ([NonObjC])? // expected-error{{@IBOutlet property cannot be an array of non-'@objc' class type}} {{3-13=}}
@@ -166,7 +171,7 @@ class SwiftGizmo {
   @IBOutlet var b1 : [C]
   @IBOutlet var b2 : [C]!
   @IBOutlet var c : String!
-  @IBOutlet var d : [String]! // expected-error{{property cannot be marked @IBOutlet because its type cannot be represented in Objective-C}}
+  @IBOutlet var d : [String]!
   @IBOutlet var e : Proto!
 
   @IBOutlet var f : C?
@@ -176,10 +181,10 @@ class SwiftGizmo {
   @IBOutlet weak var i : C!
   @IBOutlet unowned var j : C // expected-error{{@IBOutlet property has non-optional type 'C'}}
   // expected-note @-1{{add '?' to form the optional type 'C?'}}{{30-30=?}}
-  // expected-note @-2{{add '!' to form the implicitly unwrapped optional type 'C!'}}{{30-30=!}}
+  // expected-note @-2{{add '!' to form an implicitly unwrapped optional}}{{30-30=!}}
   @IBOutlet unowned(unsafe) var k : C // expected-error{{@IBOutlet property has non-optional type 'C'}}
   // expected-note @-1{{add '?' to form the optional type 'C?'}}{{38-38=?}}
-  // expected-note @-2{{add '!' to form the implicitly unwrapped optional type 'C!'}}{{38-38=!}}
+  // expected-note @-2{{add '!' to form an implicitly unwrapped optional}}{{38-38=!}}
 
   @IBOutlet var bad1 : Int  // expected-error {{@IBOutlet property cannot have non-object type 'Int'}} {{3-13=}}
 
@@ -192,10 +197,10 @@ class SwiftGizmo {
 class MissingOptional {
   @IBOutlet var a: C // expected-error{{@IBOutlet property has non-optional type 'C'}}
   // expected-note @-1{{add '?' to form the optional type 'C?'}}{{21-21=?}}
-  // expected-note @-2{{add '!' to form the implicitly unwrapped optional type 'C!'}}{{21-21=!}}
+  // expected-note @-2{{add '!' to form an implicitly unwrapped optional}}{{21-21=!}}
 
   @IBOutlet weak var b: C // expected-error{{@IBOutlet property has non-optional type 'C'}}
-  // expected-note @-1{{add '!' to form the implicitly unwrapped optional type 'C!'}} {{26-26=!}}
+  // expected-note @-1{{add '!' to form an implicitly unwrapped optional}} {{26-26=!}}
   // expected-note @-2{{add '?' to form the optional type 'C?'}} {{26-26=?}}
 
   init() {}

@@ -1,9 +1,8 @@
-// RUN: rm -rf %t
-// RUN: mkdir %t
+// RUN: %empty-directory(%t)
 // RUN: %target-build-swift -module-name alias -emit-module -o %t %S/Inputs/alias.swift
-// RUN: llvm-bcanalyzer %t/alias.swiftmodule | FileCheck %s
+// RUN: llvm-bcanalyzer %t/alias.swiftmodule | %FileCheck %s
 // RUN: %target-build-swift -I %t %s -o %t/a.out
-// RUN: %target-run %t/a.out | FileCheck -check-prefix=OUTPUT %s
+// RUN: %target-run %t/a.out | %FileCheck -check-prefix=OUTPUT %s
 // REQUIRES: executable_test
 
 // CHECK-NOT: UnknownCode
@@ -52,3 +51,5 @@ print("\(dyadic((named.b, i))) \(dyadic(both))\n", terminator: "")
 func check(_: BaseAlias) {
 }
 
+let x: GG<Int> = 0
+let x2: GInt = 1

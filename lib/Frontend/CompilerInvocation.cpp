@@ -1,27 +1,30 @@
-//===-- CompilerInvocation.cpp - CompilerInvocation methods ---------------===//
+//===--- CompilerInvocation.cpp - CompilerInvocation methods --------------===//
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2015 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
 #include "swift/Frontend/Frontend.h"
 
-#include "swift/Strings.h"
+#include "ArgsToFrontendOptionsConverter.h"
 #include "swift/AST/DiagnosticsFrontend.h"
 #include "swift/Basic/Platform.h"
 #include "swift/Option/Options.h"
+#include "swift/Option/SanitizerOptions.h"
+#include "swift/Strings.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/LineIterator.h"
 #include "llvm/Support/Path.h"
 
 using namespace swift;
@@ -46,7 +49,7 @@ static void updateRuntimeLibraryPath(SearchPathOptions &SearchPathOpts,
   llvm::sys::path::append(LibPath, getPlatformNameForTriple(Triple));
   SearchPathOpts.RuntimeLibraryPath = LibPath.str();
 
-  llvm::sys::path::append(LibPath, Triple.getArchName());
+  llvm::sys::path::append(LibPath, swift::getMajorArchitectureName(Triple));
   SearchPathOpts.RuntimeLibraryImportPath = LibPath.str();
 }
 
@@ -74,605 +77,102 @@ SourceFileKind CompilerInvocation::getSourceFileKind() const {
   case InputFileKind::IFK_LLVM_IR:
     llvm_unreachable("Trying to convert from unsupported InputFileKind");
   }
+
+  llvm_unreachable("Unhandled InputFileKind in switch.");
 }
 
-// This is a separate function so that it shows up in stack traces.
-LLVM_ATTRIBUTE_NOINLINE
-static void debugFailWithAssertion() {
-  // This assertion should always fail, per the user's request, and should
-  // not be converted to llvm_unreachable.
-  assert(0 && "This is an assertion!");
+static bool ParseFrontendArgs(
+    FrontendOptions &opts, ArgList &args, DiagnosticEngine &diags,
+    SmallVectorImpl<std::unique_ptr<llvm::MemoryBuffer>> *buffers) {
+  ArgsToFrontendOptionsConverter converter(diags, args, opts);
+  return converter.convert(buffers);
 }
 
-// This is a separate function so that it shows up in stack traces.
-LLVM_ATTRIBUTE_NOINLINE
-static void debugFailWithCrash() {
-  LLVM_BUILTIN_TRAP;
-}
+static void diagnoseSwiftVersion(Optional<version::Version> &vers, Arg *verArg,
+                                 ArgList &Args, DiagnosticEngine &diags) {
+  // General invalid version error
+  diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
+                 verArg->getAsString(Args), verArg->getValue());
 
-static bool ParseFrontendArgs(FrontendOptions &Opts, ArgList &Args,
-                              DiagnosticEngine &Diags) {
-  using namespace options;
-
-  if (const Arg *A = Args.getLastArg(OPT_debug_crash_Group)) {
-    Option Opt = A->getOption();
-    if (Opt.matches(OPT_debug_assert_immediately)) {
-      debugFailWithAssertion();
-    } else if (Opt.matches(OPT_debug_crash_immediately)) {
-      debugFailWithCrash();
-    } else if (Opt.matches(OPT_debug_assert_after_parse)) {
-      // Set in FrontendOptions
-      Opts.CrashMode = FrontendOptions::DebugCrashMode::AssertAfterParse;
-    } else if (Opt.matches(OPT_debug_crash_after_parse)) {
-      // Set in FrontendOptions
-      Opts.CrashMode = FrontendOptions::DebugCrashMode::CrashAfterParse;
-    } else {
-      llvm_unreachable("Unknown debug_crash_Group option!");
-    }
-  }
-
-  if (const Arg *A = Args.getLastArg(OPT_dump_api_path)) {
-    Opts.DumpAPIPath = A->getValue();
-  }
-
-  Opts.EmitVerboseSIL |= Args.hasArg(OPT_emit_verbose_sil);
-  Opts.EmitSortedSIL |= Args.hasArg(OPT_emit_sorted_sil);
-
-  Opts.DelayedFunctionBodyParsing |= Args.hasArg(OPT_delayed_function_body_parsing);
-  Opts.EnableTesting |= Args.hasArg(OPT_enable_testing);
-
-  Opts.PrintStats |= Args.hasArg(OPT_print_stats);
-  Opts.PrintClangStats |= Args.hasArg(OPT_print_clang_stats);
-  Opts.DebugTimeFunctionBodies |= Args.hasArg(OPT_debug_time_function_bodies);
-
-  Opts.PlaygroundTransform |= Args.hasArg(OPT_playground);
-  if (Args.hasArg(OPT_disable_playground_transform))
-    Opts.PlaygroundTransform = false;
-  Opts.PlaygroundHighPerformance |=
-    Args.hasArg(OPT_playground_high_performance);
-
-  if (const Arg *A = Args.getLastArg(OPT_help, OPT_help_hidden)) {
-    if (A->getOption().matches(OPT_help)) {
-      Opts.PrintHelp = true;
-    } else if (A->getOption().matches(OPT_help_hidden)) {
-      Opts.PrintHelpHidden = true;
-    } else {
-      llvm_unreachable("Unknown help option parsed");
-    }
-  }
-
-  for (const Arg *A : make_range(Args.filtered_begin(OPT_INPUT,
-                                                     OPT_primary_file),
-                                 Args.filtered_end())) {
-    if (A->getOption().matches(OPT_INPUT)) {
-      Opts.InputFilenames.push_back(A->getValue());
-    } else if (A->getOption().matches(OPT_primary_file)) {
-      Opts.PrimaryInput = SelectedInput(Opts.InputFilenames.size());
-      Opts.InputFilenames.push_back(A->getValue());
-    } else {
-      llvm_unreachable("Unknown input-related argument!");
-    }
-  }
-
-  Opts.ParseStdlib |= Args.hasArg(OPT_parse_stdlib);
-
-  // Determine what the user has asked the frontend to do.
-  FrontendOptions::ActionType &Action = Opts.RequestedAction;
-  if (const Arg *A = Args.getLastArg(OPT_modes_Group)) {
-    Option Opt = A->getOption();
-    if (Opt.matches(OPT_emit_object)) {
-      Action = FrontendOptions::EmitObject;
-    } else if (Opt.matches(OPT_emit_assembly)) {
-      Action = FrontendOptions::EmitAssembly;
-    } else if (Opt.matches(OPT_emit_ir)) {
-      Action = FrontendOptions::EmitIR;
-    } else if (Opt.matches(OPT_emit_bc)) {
-      Action = FrontendOptions::EmitBC;
-    } else if (Opt.matches(OPT_emit_sil)) {
-      Action = FrontendOptions::EmitSIL;
-    } else if (Opt.matches(OPT_emit_silgen)) {
-      Action = FrontendOptions::EmitSILGen;
-    } else if (Opt.matches(OPT_emit_sib)) {
-      Action = FrontendOptions::EmitSIB;
-    } else if (Opt.matches(OPT_emit_sibgen)) {
-      Action = FrontendOptions::EmitSIBGen;
-    } else if (Opt.matches(OPT_parse)) {
-      Action = FrontendOptions::Parse;
-    } else if (Opt.matches(OPT_dump_parse)) {
-      Action = FrontendOptions::DumpParse;
-    } else if (Opt.matches(OPT_dump_ast)) {
-      Action = FrontendOptions::DumpAST;
-    } else if (Opt.matches(OPT_dump_type_refinement_contexts)) {
-      Action = FrontendOptions::DumpTypeRefinementContexts;
-    } else if (Opt.matches(OPT_dump_interface_hash)) {
-      Action = FrontendOptions::DumpInterfaceHash;
-    } else if (Opt.matches(OPT_print_ast)) {
-      Action = FrontendOptions::PrintAST;
-    } else if (Opt.matches(OPT_repl) ||
-               Opt.matches(OPT_deprecated_integrated_repl)) {
-      Action = FrontendOptions::REPL;
-    } else if (Opt.matches(OPT_interpret)) {
-      Action = FrontendOptions::Immediate;
-    } else {
-      llvm_unreachable("Unhandled mode option");
-    }
+  // Check for an unneeded minor version, otherwise just list valid versions
+  if (vers.hasValue() && !vers.getValue().empty() &&
+      vers.getValue().asMajorVersion().getEffectiveLanguageVersion()) {
+    diags.diagnose(SourceLoc(), diag::note_swift_version_major,
+                   vers.getValue()[0]);
   } else {
-    // We don't have a mode, so determine a default.
-    if (Args.hasArg(OPT_emit_module, OPT_emit_module_path)) {
-      // We've been told to emit a module, but have no other mode indicators.
-      // As a result, put the frontend into EmitModuleOnly mode.
-      // (Setting up module output will be handled below.)
-      Action = FrontendOptions::EmitModuleOnly;
-    }
+    // Note valid versions instead
+    auto validVers = version::Version::getValidEffectiveVersions();
+    auto versStr =
+        "'" + llvm::join(validVers.begin(), validVers.end(), "', '") + "'";
+    diags.diagnose(SourceLoc(), diag::note_valid_swift_versions, versStr);
   }
+}
 
-  if (Opts.RequestedAction == FrontendOptions::Immediate &&
-      Opts.PrimaryInput.hasValue()) {
-    Diags.diagnose(SourceLoc(), diag::error_immediate_mode_primary_file);
-    return true;
+/// \brief Create a new Regex instance out of the string value in \p RpassArg.
+/// It returns a pointer to the newly generated Regex instance.
+static std::shared_ptr<llvm::Regex>
+generateOptimizationRemarkRegex(DiagnosticEngine &Diags, ArgList &Args,
+                                Arg *RpassArg) {
+  StringRef Val = RpassArg->getValue();
+  std::string RegexError;
+  std::shared_ptr<llvm::Regex> Pattern = std::make_shared<llvm::Regex>(Val);
+  if (!Pattern->isValid(RegexError)) {
+    Diags.diagnose(SourceLoc(), diag::error_optimization_remark_pattern,
+                   RegexError, RpassArg->getAsString(Args));
+    Pattern.reset();
   }
-
-  bool TreatAsSIL = Args.hasArg(OPT_parse_sil);
-  if (!TreatAsSIL && Opts.InputFilenames.size() == 1) {
-    // If we have exactly one input filename, and its extension is "sil",
-    // treat the input as SIL.
-    StringRef Input(Opts.InputFilenames[0]);
-    TreatAsSIL = llvm::sys::path::extension(Input).endswith(SIL_EXTENSION);
-  } else if (Opts.PrimaryInput.hasValue() && Opts.PrimaryInput->isFilename()) {
-    // If we have a primary input and it's a filename with extension "sil",
-    // treat the input as SIL.
-    StringRef Input(Opts.InputFilenames[Opts.PrimaryInput->Index]);
-    TreatAsSIL = llvm::sys::path::extension(Input).endswith(SIL_EXTENSION);
-  }
-
-  // If we have exactly one input filename, and its extension is "bc" or "ll",
-  // treat the input as LLVM_IR.
-  bool TreatAsLLVM = false;
-  if (Opts.InputFilenames.size() == 1) {
-    StringRef Input(Opts.InputFilenames[0]);
-    TreatAsLLVM =
-      llvm::sys::path::extension(Input).endswith(LLVM_BC_EXTENSION) ||
-      llvm::sys::path::extension(Input).endswith(LLVM_IR_EXTENSION);
-  }
-
-  if (Opts.RequestedAction == FrontendOptions::REPL) {
-    if (!Opts.InputFilenames.empty()) {
-      Diags.diagnose(SourceLoc(), diag::error_repl_requires_no_input_files);
-      return true;
-    }
-  } else if (TreatAsSIL && Opts.PrimaryInput.hasValue()) {
-    // If we have the SIL as our primary input, we can waive the one file
-    // requirement as long as all the other inputs are SIBs.
-    if (Opts.PrimaryInput.hasValue()) {
-      for (unsigned i = 0, e = Opts.InputFilenames.size(); i != e; ++i) {
-        if (i == Opts.PrimaryInput->Index)
-          continue;
-
-        StringRef File(Opts.InputFilenames[i]);
-        if (!llvm::sys::path::extension(File).endswith(SIB_EXTENSION)) {
-          Diags.diagnose(SourceLoc(),
-                         diag::error_mode_requires_one_sil_multi_sib);
-          return true;
-        }
-      }
-    }
-  } else if (TreatAsSIL) {
-    if (Opts.InputFilenames.size() != 1) {
-      Diags.diagnose(SourceLoc(), diag::error_mode_requires_one_input_file);
-      return true;
-    }
-  } else if (Opts.RequestedAction != FrontendOptions::NoneAction) {
-    if (Opts.InputFilenames.empty()) {
-      Diags.diagnose(SourceLoc(), diag::error_mode_requires_an_input_file);
-      return true;
-    }
-  }
-
-  if (Opts.RequestedAction == FrontendOptions::Immediate) {
-    assert(!Opts.InputFilenames.empty());
-    Opts.ImmediateArgv.push_back(Opts.InputFilenames[0]); // argv[0]
-    if (const Arg *A = Args.getLastArg(OPT__DASH_DASH)) {
-      for (unsigned i = 0, e = A->getNumValues(); i != e; ++i) {
-        Opts.ImmediateArgv.push_back(A->getValue(i));
-      }
-    }
-  }
-
-  if (TreatAsSIL)
-    Opts.InputKind = InputFileKind::IFK_SIL;
-  else if (TreatAsLLVM)
-    Opts.InputKind = InputFileKind::IFK_LLVM_IR;
-  else if (Args.hasArg(OPT_parse_as_library))
-    Opts.InputKind = InputFileKind::IFK_Swift_Library;
-  else if (Action == FrontendOptions::REPL)
-    Opts.InputKind = InputFileKind::IFK_Swift_REPL;
-  else
-    Opts.InputKind = InputFileKind::IFK_Swift;
-
-  Opts.OutputFilenames = Args.getAllArgValues(OPT_o);
-
-  bool UserSpecifiedModuleName = false;
-  {
-    const Arg *A = Args.getLastArg(OPT_module_name);
-    StringRef ModuleName = Opts.ModuleName;
-    if (A) {
-      ModuleName = A->getValue();
-      UserSpecifiedModuleName = true;
-    } else if (ModuleName.empty()) {
-      // The user did not specify a module name, so determine a default fallback
-      // based on other options.
-
-      // Note: this code path will only be taken when running the frontend
-      // directly; the driver should always pass -module-name when invoking the
-      // frontend.
-      if (Opts.RequestedAction == FrontendOptions::REPL) {
-        // Default to a module named "REPL" if we're in REPL mode.
-        ModuleName = "REPL";
-      } else if (!Opts.InputFilenames.empty()) {
-        StringRef OutputFilename = Opts.getSingleOutputFilename();
-        if (OutputFilename.empty() || OutputFilename == "-" ||
-            llvm::sys::fs::is_directory(OutputFilename)) {
-          ModuleName = Opts.InputFilenames[0];
-        } else {
-          ModuleName = OutputFilename;
-        }
-
-        ModuleName = llvm::sys::path::stem(ModuleName);
-      }
-    }
-
-    if (!Lexer::isIdentifier(ModuleName) ||
-        (ModuleName == STDLIB_NAME && !Opts.ParseStdlib)) {
-      if (!Opts.actionHasOutput() ||
-          (Opts.InputKind == InputFileKind::IFK_Swift &&
-           Opts.InputFilenames.size() == 1)) {
-        ModuleName = "main";
-      } else {
-        auto DID = (ModuleName == STDLIB_NAME) ? diag::error_stdlib_module_name
-                                               : diag::error_bad_module_name;
-        Diags.diagnose(SourceLoc(), DID, ModuleName, A == nullptr);
-        ModuleName = "__bad__";
-      }
-    }
-
-    Opts.ModuleName = ModuleName;
-  }
-
-  if (Opts.OutputFilenames.empty() ||
-      llvm::sys::fs::is_directory(Opts.getSingleOutputFilename())) {
-    // No output filename was specified, or an output directory was specified.
-    // Determine the correct output filename.
-
-    // Note: this should typically only be used when invoking the frontend
-    // directly, as the driver will always pass -o with an appropriate filename
-    // if output is required for the requested action.
-
-    StringRef Suffix;
-    switch (Opts.RequestedAction) {
-    case FrontendOptions::NoneAction:
-      break;
-
-    case FrontendOptions::Parse:
-    case FrontendOptions::DumpParse:
-    case FrontendOptions::DumpInterfaceHash:
-    case FrontendOptions::DumpAST:
-    case FrontendOptions::PrintAST:
-    case FrontendOptions::DumpTypeRefinementContexts:
-      // Textual modes.
-      Opts.setSingleOutputFilename("-");
-      break;
-
-    case FrontendOptions::EmitSILGen:
-    case FrontendOptions::EmitSIL: {
-      if (Opts.OutputFilenames.empty())
-        Opts.setSingleOutputFilename("-");
-      else
-        Suffix = SIL_EXTENSION;
-      break;
-    }
-
-    case FrontendOptions::EmitSIBGen:
-    case FrontendOptions::EmitSIB:
-      Suffix = SIB_EXTENSION;
-      break;
-
-    case FrontendOptions::EmitModuleOnly:
-      Suffix = SERIALIZED_MODULE_EXTENSION;
-      break;
-
-    case FrontendOptions::Immediate:
-    case FrontendOptions::REPL:
-      // These modes have no frontend-generated output.
-      Opts.OutputFilenames.clear();
-      break;
-
-    case FrontendOptions::EmitAssembly: {
-      if (Opts.OutputFilenames.empty())
-        Opts.setSingleOutputFilename("-");
-      else
-        Suffix = "s";
-      break;
-    }
-
-    case FrontendOptions::EmitIR: {
-      if (Opts.OutputFilenames.empty())
-        Opts.setSingleOutputFilename("-");
-      else
-        Suffix = "ll";
-      break;
-    }
-
-    case FrontendOptions::EmitBC: {
-      Suffix = "bc";
-      break;
-    }
-
-    case FrontendOptions::EmitObject:
-      Suffix = "o";
-      break;
-    }
-
-    if (!Suffix.empty()) {
-      // We need to deduce a file name.
-
-      // First, if we're reading from stdin and we don't have a directory,
-      // output to stdout.
-      if (Opts.InputFilenames.size() == 1 && Opts.InputFilenames[0] == "-" &&
-          Opts.OutputFilenames.empty())
-        Opts.setSingleOutputFilename("-");
-      else {
-        // We have a suffix, so determine an appropriate name.
-        llvm::SmallString<128> Path(Opts.getSingleOutputFilename());
-
-        StringRef BaseName;
-        if (Opts.PrimaryInput.hasValue() && Opts.PrimaryInput->isFilename()) {
-          unsigned Index = Opts.PrimaryInput->Index;
-          BaseName = llvm::sys::path::stem(Opts.InputFilenames[Index]);
-        } else if (!UserSpecifiedModuleName &&
-                   Opts.InputFilenames.size() == 1) {
-          BaseName = llvm::sys::path::stem(Opts.InputFilenames[0]);
-        } else {
-          BaseName = Opts.ModuleName;
-        }
-
-        llvm::sys::path::append(Path, BaseName);
-        llvm::sys::path::replace_extension(Path, Suffix);
-
-        Opts.setSingleOutputFilename(Path.str());
-      }
-    }
-
-    if (Opts.OutputFilenames.empty()) {
-      if (Opts.RequestedAction != FrontendOptions::REPL &&
-          Opts.RequestedAction != FrontendOptions::Immediate &&
-          Opts.RequestedAction != FrontendOptions::NoneAction) {
-        Diags.diagnose(SourceLoc(), diag::error_no_output_filename_specified);
-        return true;
-      }
-    } else if (Opts.getSingleOutputFilename() != "-" &&
-        llvm::sys::fs::is_directory(Opts.getSingleOutputFilename())) {
-      Diags.diagnose(SourceLoc(), diag::error_implicit_output_file_is_directory,
-                     Opts.getSingleOutputFilename());
-      return true;
-    }
-  }
-
-  auto determineOutputFilename = [&](std::string &output,
-                                     OptSpecifier optWithoutPath,
-                                     OptSpecifier optWithPath,
-                                     const char *extension,
-                                     bool useMainOutput) {
-    if (const Arg *A = Args.getLastArg(optWithPath)) {
-      Args.ClaimAllArgs(optWithoutPath);
-      output = A->getValue();
-      return;
-    }
-
-    if (!Args.hasArg(optWithoutPath))
-      return;
-
-    if (useMainOutput && !Opts.OutputFilenames.empty()) {
-      output = Opts.getSingleOutputFilename();
-      return;
-    }
-
-    if (!output.empty())
-      return;
-
-    StringRef OriginalPath;
-    if (!Opts.OutputFilenames.empty() && Opts.getSingleOutputFilename() != "-")
-      // Put the serialized diagnostics file next to the output file.
-      OriginalPath = Opts.getSingleOutputFilename();
-    else if (Opts.PrimaryInput.hasValue() && Opts.PrimaryInput->isFilename())
-      // We have a primary input, so use that as the basis for the name of the
-      // serialized diagnostics file.
-      OriginalPath = llvm::sys::path::filename(
-        Opts.InputFilenames[Opts.PrimaryInput->Index]);
-    else
-      // We don't have any better indication of name, so fall back on the
-      // module name.
-      OriginalPath = Opts.ModuleName;
-
-    llvm::SmallString<128> Path(OriginalPath);
-    llvm::sys::path::replace_extension(Path, extension);
-    output = Path.str();
-  };
-
-  determineOutputFilename(Opts.DependenciesFilePath,
-                          OPT_emit_dependencies,
-                          OPT_emit_dependencies_path,
-                          "d", false);
-  determineOutputFilename(Opts.ReferenceDependenciesFilePath,
-                          OPT_emit_reference_dependencies,
-                          OPT_emit_reference_dependencies_path,
-                          "swiftdeps", false);
-  determineOutputFilename(Opts.SerializedDiagnosticsPath,
-                          OPT_serialize_diagnostics,
-                          OPT_serialize_diagnostics_path,
-                          "dia", false);
-  determineOutputFilename(Opts.ObjCHeaderOutputPath,
-                          OPT_emit_objc_header,
-                          OPT_emit_objc_header_path,
-                          "h", false);
-
-  if (const Arg *A = Args.getLastArg(OPT_emit_fixits_path)) {
-    Opts.FixitsOutputPath = A->getValue();
-  }
-
-  bool IsSIB =
-    Opts.RequestedAction == FrontendOptions::EmitSIB ||
-    Opts.RequestedAction == FrontendOptions::EmitSIBGen;
-  bool canUseMainOutputForModule =
-    Opts.RequestedAction == FrontendOptions::EmitModuleOnly || IsSIB;
-  auto ext = IsSIB ? SIB_EXTENSION : SERIALIZED_MODULE_EXTENSION;
-  auto sibOpt = Opts.RequestedAction == FrontendOptions::EmitSIB ?
-    OPT_emit_sib : OPT_emit_sibgen;
-  determineOutputFilename(Opts.ModuleOutputPath,
-                          IsSIB ? sibOpt : OPT_emit_module,
-                          OPT_emit_module_path,
-                          ext,
-                          canUseMainOutputForModule);
-
-  determineOutputFilename(Opts.ModuleDocOutputPath,
-                          OPT_emit_module_doc,
-                          OPT_emit_module_doc_path,
-                          SERIALIZED_MODULE_DOC_EXTENSION,
-                          false);
-
-  if (!Opts.DependenciesFilePath.empty()) {
-    switch (Opts.RequestedAction) {
-    case FrontendOptions::NoneAction:
-    case FrontendOptions::DumpParse:
-    case FrontendOptions::DumpInterfaceHash:
-    case FrontendOptions::DumpAST:
-    case FrontendOptions::PrintAST:
-    case FrontendOptions::DumpTypeRefinementContexts:
-    case FrontendOptions::Immediate:
-    case FrontendOptions::REPL:
-      Diags.diagnose(SourceLoc(), diag::error_mode_cannot_emit_dependencies);
-      return true;
-    case FrontendOptions::Parse:
-    case FrontendOptions::EmitModuleOnly:
-    case FrontendOptions::EmitSILGen:
-    case FrontendOptions::EmitSIL:
-    case FrontendOptions::EmitSIBGen:
-    case FrontendOptions::EmitSIB:
-    case FrontendOptions::EmitIR:
-    case FrontendOptions::EmitBC:
-    case FrontendOptions::EmitAssembly:
-    case FrontendOptions::EmitObject:
-      break;
-    }
-  }
-
-  if (!Opts.ObjCHeaderOutputPath.empty()) {
-    switch (Opts.RequestedAction) {
-    case FrontendOptions::NoneAction:
-    case FrontendOptions::DumpParse:
-    case FrontendOptions::DumpInterfaceHash:
-    case FrontendOptions::DumpAST:
-    case FrontendOptions::PrintAST:
-    case FrontendOptions::DumpTypeRefinementContexts:
-    case FrontendOptions::Immediate:
-    case FrontendOptions::REPL:
-      Diags.diagnose(SourceLoc(), diag::error_mode_cannot_emit_header);
-      return true;
-    case FrontendOptions::Parse:
-    case FrontendOptions::EmitModuleOnly:
-    case FrontendOptions::EmitSILGen:
-    case FrontendOptions::EmitSIL:
-    case FrontendOptions::EmitSIBGen:
-    case FrontendOptions::EmitSIB:
-    case FrontendOptions::EmitIR:
-    case FrontendOptions::EmitBC:
-    case FrontendOptions::EmitAssembly:
-    case FrontendOptions::EmitObject:
-      break;
-    }
-  }
-
-  if (!Opts.ModuleOutputPath.empty() ||
-      !Opts.ModuleDocOutputPath.empty()) {
-    switch (Opts.RequestedAction) {
-    case FrontendOptions::NoneAction:
-    case FrontendOptions::Parse:
-    case FrontendOptions::DumpParse:
-    case FrontendOptions::DumpInterfaceHash:
-    case FrontendOptions::DumpAST:
-    case FrontendOptions::PrintAST:
-    case FrontendOptions::DumpTypeRefinementContexts:
-    case FrontendOptions::EmitSILGen:
-    case FrontendOptions::Immediate:
-    case FrontendOptions::REPL:
-      if (!Opts.ModuleOutputPath.empty())
-        Diags.diagnose(SourceLoc(), diag::error_mode_cannot_emit_module);
-      else
-        Diags.diagnose(SourceLoc(), diag::error_mode_cannot_emit_module_doc);
-      return true;
-    case FrontendOptions::EmitModuleOnly:
-    case FrontendOptions::EmitSIL:
-    case FrontendOptions::EmitSIBGen:
-    case FrontendOptions::EmitSIB:
-    case FrontendOptions::EmitIR:
-    case FrontendOptions::EmitBC:
-    case FrontendOptions::EmitAssembly:
-    case FrontendOptions::EmitObject:
-      break;
-    }
-  }
-
-  if (const Arg *A = Args.getLastArg(OPT_module_link_name)) {
-    Opts.ModuleLinkName = A->getValue();
-  }
-
-  Opts.AlwaysSerializeDebuggingOptions |=
-      Args.hasArg(OPT_serialize_debugging_options);
-  Opts.EnableSourceImport |= Args.hasArg(OPT_enable_source_import);
-  Opts.ImportUnderlyingModule |= Args.hasArg(OPT_import_underlying_module);
-  Opts.SILSerializeAll |= Args.hasArg(OPT_sil_serialize_all);
-
-  if (const Arg *A = Args.getLastArg(OPT_import_objc_header)) {
-    Opts.ImplicitObjCHeaderPath = A->getValue();
-    Opts.SerializeBridgingHeader |=
-      !Opts.PrimaryInput && !Opts.ModuleOutputPath.empty();
-  }
-
-  for (const Arg *A : make_range(Args.filtered_begin(OPT_import_module),
-                                 Args.filtered_end())) {
-    Opts.ImplicitImportModuleNames.push_back(A->getValue());
-  }
-
-  for (const Arg *A : make_range(Args.filtered_begin(OPT_Xllvm),
-                                 Args.filtered_end())) {
-    Opts.LLVMArgs.push_back(A->getValue());
-  }
-
-  return false;
+  return Pattern;
 }
 
 static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
-                          DiagnosticEngine &Diags, bool isImmediate) {
+                          DiagnosticEngine &Diags,
+                          const FrontendOptions &FrontendOpts) {
   using namespace options;
+
+  /// FIXME: Remove this flag when void subscripts are implemented.
+  /// This is used to guard preemptive testing for the fix-it.
+  if (Args.hasArg(OPT_fix_string_substring_conversion)) {
+    Opts.FixStringToSubstringConversions = true;
+  }
+
+  if (auto A = Args.getLastArg(OPT_swift_version)) {
+    auto vers = version::Version::parseVersionString(
+      A->getValue(), SourceLoc(), &Diags);
+    bool isValid = false;
+    if (vers.hasValue()) {
+      if (auto effectiveVers = vers.getValue().getEffectiveLanguageVersion()) {
+        Opts.EffectiveLanguageVersion = effectiveVers.getValue();
+        isValid = true;
+      }
+    }
+    if (!isValid)
+      diagnoseSwiftVersion(vers, A, Args, Diags);
+  }
 
   Opts.AttachCommentsToDecls |= Args.hasArg(OPT_dump_api_path);
 
   Opts.UseMalloc |= Args.hasArg(OPT_use_malloc);
 
-  Opts.EnableExperimentalPatterns |=
-    Args.hasArg(OPT_enable_experimental_patterns);
+  Opts.DiagnosticsEditorMode |= Args.hasArg(OPT_diagnostics_editor_mode,
+                                            OPT_serialize_diagnostics_path);
 
-  Opts.DisableSelfTypeMangling |=
-    Args.hasArg(OPT_disable_self_type_mangling);
+  Opts.EnableExperimentalPropertyBehaviors |=
+    Args.hasArg(OPT_enable_experimental_property_behaviors);
 
-  Opts.EnableResilience = false;
-  if (auto A = Args.getLastArg(OPT_enable_resilience,
-                               OPT_disable_resilience)) {
-    Opts.EnableResilience
-      = A->getOption().matches(OPT_enable_resilience);
+  if (auto A = Args.getLastArg(OPT_enable_deserialization_recovery,
+                               OPT_disable_deserialization_recovery)) {
+    Opts.EnableDeserializationRecovery
+      = A->getOption().matches(OPT_enable_deserialization_recovery);
   }
 
   Opts.DisableAvailabilityChecking |=
       Args.hasArg(OPT_disable_availability_checking);
+
+  Opts.DisableTsanInoutInstrumentation |=
+      Args.hasArg(OPT_disable_tsan_inout_instrumentation);
+
+  if (FrontendOpts.InputKind == InputFileKind::IFK_SIL)
+    Opts.DisableAvailabilityChecking = true;
   
   if (auto A = Args.getLastArg(OPT_enable_access_control,
                                OPT_disable_access_control)) {
@@ -680,8 +180,27 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
       = A->getOption().matches(OPT_enable_access_control);
   }
 
+  if (auto A = Args.getLastArg(OPT_disable_typo_correction,
+                               OPT_typo_correction_limit)) {
+    if (A->getOption().matches(OPT_disable_typo_correction))
+      Opts.TypoCorrectionLimit = 0;
+    else {
+      unsigned limit;
+      if (StringRef(A->getValue()).getAsInteger(10, limit)) {
+        Diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
+                       A->getAsString(Args), A->getValue());
+        return true;
+      }
+
+      Opts.TypoCorrectionLimit = limit;
+    }
+  }
+
   Opts.CodeCompleteInitsInPostfixExpr |=
       Args.hasArg(OPT_code_complete_inits_in_postfix_expr);
+
+  Opts.CodeCompleteCallPatternHeuristics |=
+      Args.hasArg(OPT_code_complete_call_pattern_heuristics);
 
   if (auto A = Args.getLastArg(OPT_enable_target_os_checking,
                                OPT_disable_target_os_checking)) {
@@ -689,15 +208,17 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
       = A->getOption().matches(OPT_enable_target_os_checking);
   }
   
+  Opts.EnableASTScopeLookup |= Args.hasArg(OPT_enable_astscope_lookup);
   Opts.DebugConstraintSolver |= Args.hasArg(OPT_debug_constraints);
   Opts.IterativeTypeChecker |= Args.hasArg(OPT_iterative_type_checker);
+  Opts.NamedLazyMemberLoading &= !Args.hasArg(OPT_disable_named_lazy_member_loading);
   Opts.DebugGenericSignatures |= Args.hasArg(OPT_debug_generic_signatures);
 
   Opts.DebuggerSupport |= Args.hasArg(OPT_debugger_support);
   if (Opts.DebuggerSupport)
     Opts.EnableDollarIdentifiers = true;
   Opts.Playground |= Args.hasArg(OPT_playground);
-  Opts.WarnOmitNeedlessWords = Args.hasArg(OPT_warn_omit_needless_words);
+  Opts.InferImportAsMember |= Args.hasArg(OPT_enable_infer_import_as_member);
 
   Opts.EnableThrowWithoutTry |= Args.hasArg(OPT_enable_throw_without_try);
 
@@ -738,13 +259,67 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
     
     Opts.SolverMemoryThreshold = threshold;
   }
+
+  if (const Arg *A = Args.getLastArg(OPT_solver_shrink_unsolved_threshold)) {
+    unsigned threshold;
+    if (StringRef(A->getValue()).getAsInteger(10, threshold)) {
+      Diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
+                     A->getAsString(Args), A->getValue());
+      return true;
+    }
+
+    Opts.SolverShrinkUnsolvedThreshold = threshold;
+  }
+
+  if (const Arg *A = Args.getLastArg(OPT_value_recursion_threshold)) {
+    unsigned threshold;
+    if (StringRef(A->getValue()).getAsInteger(10, threshold)) {
+      Diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
+                     A->getAsString(Args), A->getValue());
+      return true;
+    }
+
+    Opts.MaxCircularityDepth = threshold;
+  }
   
-  for (const Arg *A : make_range(Args.filtered_begin(OPT_D),
-                                 Args.filtered_end())) {
-    Opts.addBuildConfigOption(A->getValue());
+  for (const Arg *A : Args.filtered(OPT_D)) {
+    Opts.addCustomConditionalCompilationFlag(A->getValue());
   }
 
   Opts.EnableAppExtensionRestrictions |= Args.hasArg(OPT_enable_app_extension);
+
+  Opts.EnableSwift3ObjCInference =
+    Args.hasFlag(OPT_enable_swift3_objc_inference,
+                 OPT_disable_swift3_objc_inference,
+                 Opts.isSwiftVersion3());
+
+  if (Opts.EnableSwift3ObjCInference) {
+    if (const Arg *A = Args.getLastArg(
+                                   OPT_warn_swift3_objc_inference_minimal,
+                                   OPT_warn_swift3_objc_inference_complete)) {
+      if (A->getOption().getID() == OPT_warn_swift3_objc_inference_minimal)
+        Opts.WarnSwift3ObjCInference = Swift3ObjCInferenceWarnings::Minimal;
+      else
+        Opts.WarnSwift3ObjCInference = Swift3ObjCInferenceWarnings::Complete;
+    }
+  }
+
+  Opts.EnableNSKeyedArchiverDiagnostics =
+      Args.hasFlag(OPT_enable_nskeyedarchiver_diagnostics,
+                   OPT_disable_nskeyedarchiver_diagnostics,
+                   Opts.EnableNSKeyedArchiverDiagnostics);
+
+  Opts.EnableNonFrozenEnumExhaustivityDiagnostics =
+    Args.hasFlag(OPT_enable_nonfrozen_enum_exhaustivity_diagnostics,
+                 OPT_disable_nonfrozen_enum_exhaustivity_diagnostics,
+                 Opts.EnableNonFrozenEnumExhaustivityDiagnostics);
+
+  if (Arg *A = Args.getLastArg(OPT_Rpass_EQ))
+    Opts.OptimizationRemarkPassedPattern =
+        generateOptimizationRemarkRegex(Diags, Args, A);
+  if (Arg *A = Args.getLastArg(OPT_Rpass_missed_EQ))
+    Opts.OptimizationRemarkMissedPattern =
+        generateOptimizationRemarkRegex(Diags, Args, A);
 
   llvm::Triple Target = Opts.Target;
   StringRef TargetArg;
@@ -753,15 +328,21 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
     TargetArg = A->getValue();
   }
 
-  Opts.EnableObjCInterop = Target.isOSDarwin();
-  if (auto A = Args.getLastArg(OPT_enable_objc_interop,
-                               OPT_disable_objc_interop)) {
-    Opts.EnableObjCInterop
-      = A->getOption().matches(OPT_enable_objc_interop);
-  }
+  Opts.EnableObjCInterop =
+      Args.hasFlag(OPT_enable_objc_interop, OPT_disable_objc_interop,
+                   Target.isOSDarwin());
+  Opts.EnableSILOpaqueValues |= Args.hasArg(OPT_enable_sil_opaque_values);
+
+  Opts.EnableKeyPathResilience |= Args.hasArg(OPT_enable_key_path_resilience);
+  
+#if SWIFT_DARWIN_ENABLE_STABLE_ABI_BIT
+  Opts.UseDarwinPreStableABIBit = false;
+#else
+  Opts.UseDarwinPreStableABIBit = true;
+#endif
 
   // Must be processed after any other language options that could affect
-  // target configuration options.
+  // platform conditions.
   bool UnsupportedOS, UnsupportedArch;
   std::tie(UnsupportedOS, UnsupportedArch) = Opts.setTarget(Target);
 
@@ -774,7 +355,7 @@ static bool ParseLangArgs(LangOptions &Opts, ArgList &Args,
   }
 
   if (UnsupportedOS) {
-    auto TargetArgOS = TargetComponents.size() > 2 ? TargetComponents.back() : "";
+    auto TargetArgOS = TargetComponents.size() > 2 ? TargetComponents[2] : "";
     Diags.diagnose(SourceLoc(), diag::error_unsupported_target_os, TargetArgOS);
   }
 
@@ -794,8 +375,10 @@ static bool ParseClangImporterArgs(ClangImporterOptions &Opts,
   if (const Arg *A = Args.getLastArg(OPT_target_cpu))
     Opts.TargetCPU = A->getValue();
 
-  for (const Arg *A : make_range(Args.filtered_begin(OPT_Xcc),
-                                 Args.filtered_end())) {
+  if (const Arg *A = Args.getLastArg(OPT_index_store_path))
+    Opts.IndexStorePath = A->getValue();
+
+  for (const Arg *A : Args.filtered(OPT_Xcc)) {
     Opts.ExtraArgs.push_back(A->getValue());
   }
 
@@ -808,17 +391,25 @@ static bool ParseClangImporterArgs(ClangImporterOptions &Opts,
     });
   }
 
-  Opts.InferImplicitProperties |=
-    Args.hasArg(OPT_enable_objc_implicit_properties);
-
-  Opts.OmitNeedlessWords |= Args.hasArg(OPT_enable_omit_needless_words);
-  Opts.InferDefaultArguments |= Args.hasArg(OPT_enable_infer_default_arguments);
-
+  Opts.InferImportAsMember |= Args.hasArg(OPT_enable_infer_import_as_member);
   Opts.DumpClangDiagnostics |= Args.hasArg(OPT_dump_clang_diagnostics);
 
   if (Args.hasArg(OPT_embed_bitcode))
     Opts.Mode = ClangImporterOptions::Modes::EmbedBitcode;
+  if (auto *A = Args.getLastArg(OPT_import_objc_header))
+    Opts.BridgingHeader = A->getValue();
+  Opts.DisableSwiftBridgeAttr |= Args.hasArg(OPT_disable_swift_bridge_attr);
 
+  Opts.DisableModulesValidateSystemHeaders |= Args.hasArg(OPT_disable_modules_validate_system_headers);
+
+  Opts.DisableAdapterModules |= Args.hasArg(OPT_emit_imported_modules);
+
+  if (const Arg *A = Args.getLastArg(OPT_pch_output_dir)) {
+    Opts.PrecompiledHeaderOutputDir = A->getValue();
+    Opts.PCHDisableValidation |= Args.hasArg(OPT_pch_disable_validation);
+  }
+
+  Opts.DebuggerSupport |= Args.hasArg(OPT_debugger_support);
   return false;
 }
 
@@ -838,18 +429,16 @@ static bool ParseSearchPathArgs(SearchPathOptions &Opts,
     return fullPath.str();
   };
 
-  for (const Arg *A : make_range(Args.filtered_begin(OPT_I),
-                                 Args.filtered_end())) {
+  for (const Arg *A : Args.filtered(OPT_I)) {
     Opts.ImportSearchPaths.push_back(resolveSearchPath(A->getValue()));
   }
 
-  for (const Arg *A : make_range(Args.filtered_begin(OPT_F),
-                                 Args.filtered_end())) {
-    Opts.FrameworkSearchPaths.push_back(resolveSearchPath(A->getValue()));
+  for (const Arg *A : Args.filtered(OPT_F, OPT_Fsystem)) {
+    Opts.FrameworkSearchPaths.push_back({resolveSearchPath(A->getValue()),
+                           /*isSystem=*/A->getOption().getID() == OPT_Fsystem});
   }
 
-  for (const Arg *A : make_range(Args.filtered_begin(OPT_L),
-                                 Args.filtered_end())) {
+  for (const Arg *A : Args.filtered(OPT_L)) {
     Opts.LibrarySearchPaths.push_back(resolveSearchPath(A->getValue()));
   }
 
@@ -877,21 +466,37 @@ static bool ParseDiagnosticArgs(DiagnosticOptions &Opts, ArgList &Args,
                                 DiagnosticEngine &Diags) {
   using namespace options;
 
-  Opts.VerifyDiagnostics |= Args.hasArg(OPT_verify);
+  if (Args.hasArg(OPT_verify))
+    Opts.VerifyMode = DiagnosticOptions::Verify;
+  if (Args.hasArg(OPT_verify_apply_fixes))
+    Opts.VerifyMode = DiagnosticOptions::VerifyAndApplyFixes;
+  Opts.VerifyIgnoreUnknown |= Args.hasArg(OPT_verify_ignore_unknown);
   Opts.SkipDiagnosticPasses |= Args.hasArg(OPT_disable_diagnostic_passes);
   Opts.ShowDiagnosticsAfterFatalError |=
     Args.hasArg(OPT_show_diagnostics_after_fatal);
   Opts.UseColor |= Args.hasArg(OPT_color_diagnostics);
   Opts.FixitCodeForAllDiagnostics |= Args.hasArg(OPT_fixit_all);
+  Opts.SuppressWarnings |= Args.hasArg(OPT_suppress_warnings);
+  Opts.WarningsAsErrors |= Args.hasArg(OPT_warnings_as_errors);
+
+  assert(!(Opts.WarningsAsErrors && Opts.SuppressWarnings) &&
+         "conflicting arguments; should have been caught by driver");
 
   return false;
 }
 
 // Lifted from the clang driver.
-static void PrintArg(raw_ostream &OS, const char *Arg, bool Quote) {
+static void PrintArg(raw_ostream &OS, const char *Arg, StringRef TempDir) {
   const bool Escape = std::strpbrk(Arg, "\"\\$ ");
 
-  if (!Quote && !Escape) {
+  if (StringRef(Arg).startswith(TempDir)) {
+    // Don't write temporary file names in the debug info. This would prevent
+    // incremental llvm compilation because we would generate different IR on
+    // every compiler invocation.
+    Arg = "<temporary-file>";
+  }
+
+  if (!Escape) {
     OS << Arg;
     return;
   }
@@ -906,14 +511,58 @@ static void PrintArg(raw_ostream &OS, const char *Arg, bool Quote) {
   OS << '"';
 }
 
+/// Parse -enforce-exclusivity=... options
+void parseExclusivityEnforcementOptions(const llvm::opt::Arg *A,
+                                        SILOptions &Opts,
+                                        DiagnosticEngine &Diags) {
+  StringRef Argument = A->getValue();
+  if (Argument == "unchecked") {
+    // This option is analogous to the -Ounchecked optimization setting.
+    // It will disable dynamic checking but still diagnose statically.
+    Opts.EnforceExclusivityStatic = true;
+    Opts.EnforceExclusivityDynamic = false;
+  } else if (Argument == "checked") {
+    Opts.EnforceExclusivityStatic = true;
+    Opts.EnforceExclusivityDynamic = true;
+  } else if (Argument == "dynamic-only") {
+    // This option is intended for staging purposes. The intent is that
+    // it will eventually be removed.
+    Opts.EnforceExclusivityStatic = false;
+    Opts.EnforceExclusivityDynamic = true;
+  } else if (Argument == "none") {
+    // This option is for staging purposes.
+    Opts.EnforceExclusivityStatic = false;
+    Opts.EnforceExclusivityDynamic = false;
+  } else {
+    Diags.diagnose(SourceLoc(), diag::error_unsupported_option_argument,
+        A->getOption().getPrefixedName(), A->getValue());
+  }
+}
+
 static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
                          IRGenOptions &IRGenOpts,
                          FrontendOptions &FEOpts,
-                         DiagnosticEngine &Diags) {
+                         DiagnosticEngine &Diags,
+                         const llvm::Triple &Triple,
+                         ClangImporterOptions &ClangOpts) {
   using namespace options;
 
   if (const Arg *A = Args.getLastArg(OPT_sil_inline_threshold)) {
     if (StringRef(A->getValue()).getAsInteger(10, Opts.InlineThreshold)) {
+      Diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
+                     A->getAsString(Args), A->getValue());
+      return true;
+    }
+  }
+  if (const Arg *A = Args.getLastArg(OPT_sil_inline_caller_benefit_reduction_factor)) {
+    if (StringRef(A->getValue()).getAsInteger(10, Opts.CallerBaseBenefitReductionFactor)) {
+      Diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
+                     A->getAsString(Args), A->getValue());
+      return true;
+    }
+  }
+  if (const Arg *A = Args.getLastArg(OPT_sil_unroll_threshold)) {
+    if (StringRef(A->getValue()).getAsInteger(10, Opts.UnrollThreshold)) {
       Diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
                      A->getAsString(Args), A->getValue());
       return true;
@@ -937,33 +586,43 @@ static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
       llvm_unreachable("Unknown SIL linking option!");
   }
 
+  if (Args.hasArg(OPT_sil_merge_partial_modules))
+    Opts.MergePartialModules = true;
+
   // Parse the optimization level.
+  // Default to Onone settings if no option is passed.
+  Opts.OptMode = OptimizationMode::NoOptimization;
   if (const Arg *A = Args.getLastArg(OPT_O_Group)) {
     if (A->getOption().matches(OPT_Onone)) {
-      IRGenOpts.Optimize = false;
-      Opts.Optimization = SILOptions::SILOptMode::None;
+      // Already set.
     } else if (A->getOption().matches(OPT_Ounchecked)) {
       // Turn on optimizations and remove all runtime checks.
-      IRGenOpts.Optimize = true;
-      Opts.Optimization = SILOptions::SILOptMode::OptimizeUnchecked;
+      Opts.OptMode = OptimizationMode::ForSpeed;
       // Removal of cond_fail (overflow on binary operations).
       Opts.RemoveRuntimeAsserts = true;
-      Opts.AssertConfig = SILOptions::Fast;
+      Opts.AssertConfig = SILOptions::Unchecked;
     } else if (A->getOption().matches(OPT_Oplayground)) {
       // For now -Oplayground is equivalent to -Onone.
-      IRGenOpts.Optimize = false;
-      Opts.Optimization = SILOptions::SILOptMode::None;
+      Opts.OptMode = OptimizationMode::NoOptimization;
+    } else if (A->getOption().matches(OPT_Osize)) {
+      Opts.OptMode = OptimizationMode::ForSize;
     } else {
       assert(A->getOption().matches(OPT_O));
-      IRGenOpts.Optimize = true;
-      Opts.Optimization = SILOptions::SILOptMode::Optimize;
+      Opts.OptMode = OptimizationMode::ForSpeed;
+    }
+
+    if (Opts.shouldOptimize()) {
+      ClangOpts.Optimization = "-Os";
     }
   }
+  IRGenOpts.OptMode = Opts.OptMode;
 
-  // Parse the build configuration identifier.
+  if (Args.getLastArg(OPT_AssumeSingleThreaded)) {
+    Opts.AssumeSingleThreaded = true;
+  }
+
+  // Parse the assert configuration identifier.
   if (const Arg *A = Args.getLastArg(OPT_AssertConfig)) {
-    // We currently understand build configuration up to 3 of which we only use
-    // 0 and 1 in the standard library.
     StringRef Configuration = A->getValue();
     if (Configuration == "DisableReplacement") {
       Opts.AssertConfig = SILOptions::DisableReplacement;
@@ -971,8 +630,8 @@ static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
       Opts.AssertConfig = SILOptions::Debug;
     } else if (Configuration == "Release") {
       Opts.AssertConfig = SILOptions::Release;
-    } else if (Configuration == "Fast") {
-      Opts.AssertConfig = SILOptions::Fast;
+    } else if (Configuration == "Unchecked") {
+      Opts.AssertConfig = SILOptions::Unchecked;
     } else {
       Diags.diagnose(SourceLoc(), diag::error_invalid_arg_value,
                      A->getAsString(Args), A->getValue());
@@ -986,13 +645,14 @@ static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
     // Set the assert configuration according to the optimization level if it
     // has not been set by the -Ounchecked flag.
     Opts.AssertConfig =
-        IRGenOpts.Optimize ? SILOptions::Release : SILOptions::Debug;
+        (IRGenOpts.shouldOptimize() ? SILOptions::Release : SILOptions::Debug);
   }
 
   // -Ounchecked might also set removal of runtime asserts (cond_fail).
-  Opts.RemoveRuntimeAsserts |= Args.hasArg(OPT_remove_runtime_asserts);
+  Opts.RemoveRuntimeAsserts |= Args.hasArg(OPT_RemoveRuntimeAsserts);
 
   Opts.EnableARCOptimizations |= !Args.hasArg(OPT_disable_arc_opts);
+  Opts.DisableSILPerfOptimizations |= Args.hasArg(OPT_disable_sil_perf_optzns);
   Opts.VerifyAll |= Args.hasArg(OPT_sil_verify_all);
   Opts.DebugSerialization |= Args.hasArg(OPT_sil_debug_serialization);
   Opts.EmitVerboseSIL |= Args.hasArg(OPT_emit_verbose_sil);
@@ -1001,7 +661,57 @@ static bool ParseSILArgs(SILOptions &Opts, ArgList &Args,
     Opts.ExternalPassPipelineFilename = A->getValue();
 
   Opts.GenerateProfile |= Args.hasArg(OPT_profile_generate);
+  const Arg *ProfileUse = Args.getLastArg(OPT_profile_use);
+  Opts.UseProfile = ProfileUse ? ProfileUse->getValue() : "";
+
   Opts.EmitProfileCoverageMapping |= Args.hasArg(OPT_profile_coverage_mapping);
+  Opts.DisableSILPartialApply |=
+    Args.hasArg(OPT_disable_sil_partial_apply);
+  Opts.EnableSILOwnership |= Args.hasArg(OPT_enable_sil_ownership);
+  Opts.AssumeUnqualifiedOwnershipWhenParsing
+    |= Args.hasArg(OPT_assume_parsing_unqualified_ownership_sil);
+  Opts.EnableMandatorySemanticARCOpts |=
+      !Args.hasArg(OPT_disable_mandatory_semantic_arc_opts);
+  Opts.EnableLargeLoadableTypes |= Args.hasArg(OPT_enable_large_loadable_types);
+  Opts.EnableGuaranteedNormalArguments &=
+      !Args.hasArg(OPT_disable_guaranteed_normal_arguments);
+
+  if (const Arg *A = Args.getLastArg(OPT_save_optimization_record_path))
+    Opts.OptRecordFile = A->getValue();
+
+  if (Args.hasArg(OPT_debug_on_sil)) {
+    // Derive the name of the SIL file for debugging from
+    // the regular outputfile.
+    std::string BaseName = FEOpts.InputsAndOutputs.getSingleOutputFilename();
+    // If there are no or multiple outputfiles, derive the name
+    // from the module name.
+    if (BaseName.empty())
+      BaseName = FEOpts.ModuleName;
+    Opts.SILOutputFileNameForDebugging = BaseName;
+  }
+
+  if (const Arg *A = Args.getLastArg(options::OPT_sanitize_EQ)) {
+    Opts.Sanitizers = parseSanitizerArgValues(
+        Args, A, Triple, Diags,
+        /* sanitizerRuntimeLibExists= */[](StringRef libName, bool shared) {
+
+          // The driver has checked the existence of the library
+          // already.
+          return true;
+        });
+    IRGenOpts.Sanitizers = Opts.Sanitizers;
+  }
+
+  if (auto A = Args.getLastArg(OPT_enable_verify_exclusivity,
+                               OPT_disable_verify_exclusivity)) {
+    Opts.VerifyExclusivity
+      = A->getOption().matches(OPT_enable_verify_exclusivity);
+  }
+  if (Opts.shouldOptimize() && !Opts.VerifyExclusivity)
+    Opts.EnforceExclusivityDynamic = false;
+  if (const Arg *A = Args.getLastArg(options::OPT_enforce_exclusivity_EQ)) {
+    parseExclusivityEnforcementOptions(A, Opts, Diags);
+  }
 
   return false;
 }
@@ -1010,9 +720,14 @@ void CompilerInvocation::buildDWARFDebugFlags(std::string &Output,
                                               const ArrayRef<const char*> &Args,
                                               StringRef SDKPath,
                                               StringRef ResourceDir) {
+  // This isn't guaranteed to be the same temp directory as what the driver
+  // uses, but it's highly likely.
+  llvm::SmallString<128> TDir;
+  llvm::sys::path::system_temp_directory(true, TDir);
+
   llvm::raw_string_ostream OS(Output);
   interleave(Args,
-             [&](const char *Argument) { PrintArg(OS, Argument, false); },
+             [&](const char *Argument) { PrintArg(OS, Argument, TDir.str()); },
              [&] { OS << " "; });
 
   // Inject the SDK path and resource dir if they are nonempty and missing.
@@ -1028,31 +743,37 @@ void CompilerInvocation::buildDWARFDebugFlags(std::string &Output,
   }
   if (!haveSDKPath) {
     OS << " -sdk ";
-    PrintArg(OS, SDKPath.data(), false);
+    PrintArg(OS, SDKPath.data(), TDir.str());
   }
   if (!haveResourceDir) {
     OS << " -resource-dir ";
-    PrintArg(OS, ResourceDir.data(), false);
+    PrintArg(OS, ResourceDir.data(), TDir.str());
   }
 }
 
 static bool ParseIRGenArgs(IRGenOptions &Opts, ArgList &Args,
                            DiagnosticEngine &Diags,
                            const FrontendOptions &FrontendOpts,
+                           const SILOptions &SILOpts,
                            StringRef SDKPath,
-                           StringRef ResourceDir) {
+                           StringRef ResourceDir,
+                           const llvm::Triple &Triple) {
   using namespace options;
 
-  if (const Arg *A = Args.getLastArg(OPT_g_Group)) {
+  if (!SILOpts.SILOutputFileNameForDebugging.empty()) {
+      Opts.DebugInfoKind = IRGenDebugInfoKind::LineTables;
+  } else if (const Arg *A = Args.getLastArg(OPT_g_Group)) {
     if (A->getOption().matches(OPT_g))
       Opts.DebugInfoKind = IRGenDebugInfoKind::Normal;
     else if (A->getOption().matches(options::OPT_gline_tables_only))
       Opts.DebugInfoKind = IRGenDebugInfoKind::LineTables;
+    else if (A->getOption().matches(options::OPT_gdwarf_types))
+      Opts.DebugInfoKind = IRGenDebugInfoKind::DwarfTypes;
     else
       assert(A->getOption().matches(options::OPT_gnone) &&
              "unknown -g<kind> option");
 
-    if (Opts.DebugInfoKind == IRGenDebugInfoKind::Normal) {
+    if (Opts.DebugInfoKind > IRGenDebugInfoKind::LineTables) {
       ArgStringList RenderedArgs;
       for (auto A : Args)
         A->render(Args, RenderedArgs);
@@ -1066,8 +787,13 @@ static bool ParseIRGenArgs(IRGenOptions &Opts, ArgList &Args,
     }
   }
 
-  for (const Arg *A : make_range(Args.filtered_begin(OPT_l, OPT_framework),
-                                 Args.filtered_end())) {
+  for (const Arg *A : Args.filtered(OPT_Xcc)) {
+    StringRef Opt = A->getValue();
+    if (Opt.startswith("-D") || Opt.startswith("-U"))
+      Opts.ClangDefines.push_back(Opt);
+  }
+
+  for (const Arg *A : Args.filtered(OPT_l, OPT_framework)) {
     LibraryKind Kind;
     if (A->getOption().matches(OPT_l)) {
       Kind = LibraryKind::Library;
@@ -1078,6 +804,13 @@ static bool ParseIRGenArgs(IRGenOptions &Opts, ArgList &Args,
     }
 
     Opts.LinkLibraries.push_back(LinkLibrary(A->getValue(), Kind));
+  }
+
+  if (auto valueNames = Args.getLastArg(OPT_disable_llvm_value_names,
+                                        OPT_enable_llvm_value_names)) {
+    Opts.HasValueNamesSetting = true;
+    Opts.ValueNames =
+      valueNames->getOption().matches(OPT_enable_llvm_value_names);
   }
 
   Opts.DisableLLVMOptzns |= Args.hasArg(OPT_disable_llvm_optzns);
@@ -1100,32 +833,30 @@ static bool ParseIRGenArgs(IRGenOptions &Opts, ArgList &Args,
   if (Args.hasArg(OPT_autolink_force_load))
     Opts.ForceLoadSymbolName = Args.getLastArgValue(OPT_module_link_name);
 
-  // TODO: investigate whether these should be removed, in favor of definitions
-  // in other classes.
-  if (FrontendOpts.PrimaryInput && FrontendOpts.PrimaryInput->isFilename()) {
-    unsigned Index = FrontendOpts.PrimaryInput->Index;
-    Opts.MainInputFilename = FrontendOpts.InputFilenames[Index];
-  } else if (FrontendOpts.InputFilenames.size() == 1) {
-    Opts.MainInputFilename = FrontendOpts.InputFilenames.front();
-  }
-  Opts.OutputFilenames = FrontendOpts.OutputFilenames;
   Opts.ModuleName = FrontendOpts.ModuleName;
 
   if (Args.hasArg(OPT_use_jit))
     Opts.UseJIT = true;
   
-  for (const Arg *A : make_range(Args.filtered_begin(OPT_verify_type_layout),
-                                 Args.filtered_end())) {
+  for (const Arg *A : Args.filtered(OPT_verify_type_layout)) {
     Opts.VerifyTypeLayoutNames.push_back(A->getValue());
   }
 
-  for (const Arg *A : make_range(Args.filtered_begin(
-                                   OPT_disable_autolink_framework),
-                                 Args.filtered_end())) {
+  for (const Arg *A : Args.filtered(OPT_disable_autolink_framework)) {
     Opts.DisableAutolinkFrameworks.push_back(A->getValue());
   }
 
   Opts.GenerateProfile |= Args.hasArg(OPT_profile_generate);
+  const Arg *ProfileUse = Args.getLastArg(OPT_profile_use);
+  Opts.UseProfile = ProfileUse ? ProfileUse->getValue() : "";
+
+  Opts.PrintInlineTree |= Args.hasArg(OPT_print_llvm_inline_tree);
+
+  Opts.UseSwiftCall = Args.hasArg(OPT_enable_swiftcall);
+
+  // This is set to true by default.
+  Opts.UseIncrementalLLVMCodeGen &=
+    !Args.hasArg(OPT_disable_incremental_llvm_codegeneration);
 
   if (Args.hasArg(OPT_embed_bitcode))
     Opts.EmbedMode = IRGenEmbedMode::EmbedBitcode;
@@ -1136,16 +867,15 @@ static bool ParseIRGenArgs(IRGenOptions &Opts, ArgList &Args,
     // Keep track of backend options so we can embed them in a separate data
     // section and use them when building from the bitcode. This can be removed
     // when all the backend options are recorded in the IR.
-    for (ArgList::const_iterator A = Args.begin(), AE = Args.end();
-         A != AE; ++ A) {
+    for (const Arg *A : Args) {
       // Do not encode output and input.
-      if ((*A)->getOption().getID() == options::OPT_o ||
-          (*A)->getOption().getID() == options::OPT_INPUT ||
-          (*A)->getOption().getID() == options::OPT_primary_file ||
-          (*A)->getOption().getID() == options::OPT_embed_bitcode)
+      if (A->getOption().getID() == options::OPT_o ||
+          A->getOption().getID() == options::OPT_INPUT ||
+          A->getOption().getID() == options::OPT_primary_file ||
+          A->getOption().getID() == options::OPT_embed_bitcode)
         continue;
       ArgStringList ASL;
-      (*A)->render(Args, ASL);
+      A->render(Args, ASL);
       for (ArgStringList::iterator it = ASL.begin(), ie = ASL.end();
           it != ie; ++ it) {
         StringRef ArgStr(*it);
@@ -1156,12 +886,128 @@ static bool ParseIRGenArgs(IRGenOptions &Opts, ArgList &Args,
     }
   }
 
+
+  if (const Arg *A = Args.getLastArg(options::OPT_sanitize_coverage_EQ)) {
+    Opts.SanitizeCoverage =
+        parseSanitizerCoverageArgValue(A, Triple, Diags, Opts.Sanitizers);
+  } else if (Opts.Sanitizers & SanitizerKind::Fuzzer) {
+
+    // Automatically set coverage flags, unless coverage type was explicitly
+    // requested.
+    Opts.SanitizeCoverage.IndirectCalls = true;
+    Opts.SanitizeCoverage.TraceCmp = true;
+    Opts.SanitizeCoverage.TracePCGuard = true;
+    Opts.SanitizeCoverage.CoverageType = llvm::SanitizerCoverageOptions::SCK_Edge;
+  }
+
+  if (Args.hasArg(OPT_disable_reflection_metadata)) {
+    Opts.EnableReflectionMetadata = false;
+    Opts.EnableReflectionNames = false;
+  }
+
+  if (Args.hasArg(OPT_disable_reflection_names)) {
+    Opts.EnableReflectionNames = false;
+  }
+
+  for (const auto &Lib : Args.getAllArgValues(options::OPT_autolink_library))
+    Opts.LinkLibraries.push_back(LinkLibrary(Lib, LibraryKind::Library));
+
   return false;
 }
 
-bool CompilerInvocation::parseArgs(ArrayRef<const char *> Args,
-                                   DiagnosticEngine &Diags,
-                                   StringRef workingDirectory) {
+static std::string getScriptFileName(StringRef name, bool isSwiftVersion3) {
+  StringRef langVer = isSwiftVersion3 ? "3" : "4";
+  return (Twine(name) + langVer + ".json").str();
+}
+
+static bool ParseMigratorArgs(MigratorOptions &Opts,
+                              LangOptions &LangOpts,
+                              const FrontendOptions &FrontendOpts,
+                              StringRef ResourcePath, const ArgList &Args,
+                              DiagnosticEngine &Diags) {
+  using namespace options;
+
+  Opts.KeepObjcVisibility |= Args.hasArg(OPT_migrate_keep_objc_visibility);
+  Opts.DumpUsr = Args.hasArg(OPT_dump_usr);
+
+  if (Args.hasArg(OPT_disable_migrator_fixits)) {
+    Opts.EnableMigratorFixits = false;
+  }
+
+  if (auto RemapFilePath = Args.getLastArg(OPT_emit_remap_file_path)) {
+    Opts.EmitRemapFilePath = RemapFilePath->getValue();
+  }
+
+  if (auto MigratedFilePath = Args.getLastArg(OPT_emit_migrated_file_path)) {
+    Opts.EmitMigratedFilePath = MigratedFilePath->getValue();
+  }
+
+  if (auto Dumpster = Args.getLastArg(OPT_dump_migration_states_dir)) {
+    Opts.DumpMigrationStatesDir = Dumpster->getValue();
+  }
+
+  if (auto DataPath = Args.getLastArg(OPT_api_diff_data_file)) {
+    Opts.APIDigesterDataStorePaths.push_back(DataPath->getValue());
+  } else {
+    auto &Triple = LangOpts.Target;
+    bool isSwiftVersion3 = LangOpts.isSwiftVersion3();
+
+    bool Supported = true;
+    llvm::SmallString<128> dataPath(ResourcePath);
+    llvm::sys::path::append(dataPath, "migrator");
+
+    if (Triple.isMacOSX())
+      llvm::sys::path::append(dataPath,
+                              getScriptFileName("macos", isSwiftVersion3));
+    else if (Triple.isiOS())
+      llvm::sys::path::append(dataPath,
+                              getScriptFileName("ios", isSwiftVersion3));
+    else if (Triple.isTvOS())
+      llvm::sys::path::append(dataPath,
+                              getScriptFileName("tvos", isSwiftVersion3));
+    else if (Triple.isWatchOS())
+      llvm::sys::path::append(dataPath,
+                              getScriptFileName("watchos", isSwiftVersion3));
+    else
+      Supported = false;
+    if (Supported) {
+      llvm::SmallString<128> authoredDataPath(ResourcePath);
+      llvm::sys::path::append(authoredDataPath, "migrator");
+      llvm::sys::path::append(authoredDataPath,
+                              getScriptFileName("overlay", isSwiftVersion3));
+      // Add authored list first to take higher priority.
+      Opts.APIDigesterDataStorePaths.push_back(authoredDataPath.str());
+      Opts.APIDigesterDataStorePaths.push_back(dataPath.str());
+    }
+  }
+
+  if (Opts.shouldRunMigrator()) {
+    assert(!FrontendOpts.InputsAndOutputs.isWholeModule());
+    // FIXME: In order to support batch mode properly, the migrator would have
+    // to support having one remap file path and one migrated file path per
+    // primary input. The easiest way to do this would be to move processing of
+    // these paths into FrontendOptions, like other supplementary outputs, and
+    // to call migrator::updateCodeAndEmitRemapIfNeeded once for each primary
+    // file.
+    //
+    // Supporting WMO would be similar, but WMO is set up to only produce one
+    // supplementary output for the whole compilation instead of one per input,
+    // so it's probably not worth it.
+    FrontendOpts.InputsAndOutputs.assertMustNotBeMoreThanOnePrimaryInput();
+
+    // Always disable typo-correction in the migrator.
+    LangOpts.TypoCorrectionLimit = 0;
+  }
+
+  return false;
+}
+
+bool CompilerInvocation::parseArgs(
+    ArrayRef<const char *> Args,
+    DiagnosticEngine &Diags,
+    SmallVectorImpl<std::unique_ptr<llvm::MemoryBuffer>>
+        *ConfigurationFileBuffers,
+    StringRef workingDirectory) {
   using namespace options;
 
   if (Args.empty())
@@ -1180,20 +1026,19 @@ bool CompilerInvocation::parseArgs(ArrayRef<const char *> Args,
   }
 
   if (ParsedArgs.hasArg(OPT_UNKNOWN)) {
-    for (const Arg *A : make_range(ParsedArgs.filtered_begin(OPT_UNKNOWN),
-                                   ParsedArgs.filtered_end())) {
+    for (const Arg *A : ParsedArgs.filtered(OPT_UNKNOWN)) {
       Diags.diagnose(SourceLoc(), diag::error_unknown_arg,
                      A->getAsString(ParsedArgs));
     }
     return true;
   }
 
-  if (ParseFrontendArgs(FrontendOpts, ParsedArgs, Diags)) {
+  if (ParseFrontendArgs(FrontendOpts, ParsedArgs, Diags,
+                        ConfigurationFileBuffers)) {
     return true;
   }
 
-  if (ParseLangArgs(LangOpts, ParsedArgs, Diags,
-                    FrontendOpts.actionIsImmediate())) {
+  if (ParseLangArgs(LangOpts, ParsedArgs, Diags, FrontendOpts)) {
     return true;
   }
 
@@ -1207,12 +1052,14 @@ bool CompilerInvocation::parseArgs(ArrayRef<const char *> Args,
     return true;
   }
 
-  if (ParseSILArgs(SILOpts, ParsedArgs, IRGenOpts, FrontendOpts, Diags)) {
+  if (ParseSILArgs(SILOpts, ParsedArgs, IRGenOpts, FrontendOpts, Diags,
+                   LangOpts.Target, ClangImporterOpts)) {
     return true;
   }
 
-  if (ParseIRGenArgs(IRGenOpts, ParsedArgs, Diags, FrontendOpts,
-                     getSDKPath(), SearchPathOpts.RuntimeResourcePath)) {
+  if (ParseIRGenArgs(IRGenOpts, ParsedArgs, Diags, FrontendOpts, SILOpts,
+                     getSDKPath(), SearchPathOpts.RuntimeResourcePath,
+                     LangOpts.Target)) {
     return true;
   }
 
@@ -1220,11 +1067,15 @@ bool CompilerInvocation::parseArgs(ArrayRef<const char *> Args,
     return true;
   }
 
+  if (ParseMigratorArgs(MigratorOpts, LangOpts, FrontendOpts,
+                        SearchPathOpts.RuntimeResourcePath, ParsedArgs, Diags)) {
+    return true;
+  }
+
   updateRuntimeLibraryPath(SearchPathOpts, LangOpts.Target);
 
   return false;
 }
-
 
 serialization::Status
 CompilerInvocation::loadFromSerializedAST(StringRef data) {
@@ -1244,4 +1095,41 @@ CompilerInvocation::loadFromSerializedAST(StringRef data) {
                         extendedInfo.getExtraClangImporterOptions().begin(),
                         extendedInfo.getExtraClangImporterOptions().end());
   return info.status;
+}
+
+llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
+CompilerInvocation::setUpInputForSILTool(
+    StringRef inputFilename, StringRef moduleNameArg,
+    bool alwaysSetModuleToMain, bool bePrimary,
+    serialization::ExtendedValidationInfo &extendedInfo) {
+  // Load the input file.
+  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileBufOrErr =
+      llvm::MemoryBuffer::getFileOrSTDIN(inputFilename);
+  if (!fileBufOrErr) {
+    return fileBufOrErr;
+  }
+
+  // If it looks like we have an AST, set the source file kind to SIL and the
+  // name of the module to the file's name.
+  getFrontendOptions().InputsAndOutputs.addInput(
+      InputFile(inputFilename, bePrimary, fileBufOrErr.get().get()));
+
+  auto result = serialization::validateSerializedAST(
+      fileBufOrErr.get()->getBuffer(), &extendedInfo);
+  bool hasSerializedAST = result.status == serialization::Status::Valid;
+
+  if (hasSerializedAST) {
+    const StringRef stem = !moduleNameArg.empty()
+                               ? moduleNameArg
+                               : llvm::sys::path::stem(inputFilename);
+    setModuleName(stem);
+    setInputKind(InputFileKind::IFK_Swift_Library);
+  } else {
+    const StringRef name = (alwaysSetModuleToMain || moduleNameArg.empty())
+                               ? "main"
+                               : moduleNameArg;
+    setModuleName(name);
+    setInputKind(InputFileKind::IFK_SIL);
+  }
+  return fileBufOrErr;
 }

@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2015 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,19 +14,21 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "swift/Subsystems.h"
-#include "swift/AST/NameLookup.h"
-#include "swift/AST/AST.h"
-#include "swift/AST/DiagnosticsSema.h"
 #include "swift/AST/ASTWalker.h"
+#include "swift/AST/DiagnosticsSema.h"
 #include "swift/AST/ModuleLoader.h"
+#include "swift/AST/NameLookup.h"
+#include "swift/AST/SubstitutionMap.h"
+#include "swift/Basic/Statistic.h"
 #include "swift/ClangImporter/ClangModule.h"
+#include "swift/Parse/Parser.h"
+#include "swift/Subsystems.h"
 #include "clang/Basic/Module.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include <algorithm>
 #include <system_error>
 using namespace swift;
@@ -35,7 +37,7 @@ using namespace swift;
 // NameBinder
 //===----------------------------------------------------------------------===//
 
-using ImportedModule = Module::ImportedModule;
+using ImportedModule = ModuleDecl::ImportedModule;
 using ImportOptions = SourceFile::ImportOptions;
 
 namespace {  
@@ -58,11 +60,11 @@ namespace {
     /// Load a module referenced by an import statement.
     ///
     /// Returns null if no module can be loaded.
-    Module *getModule(ArrayRef<std::pair<Identifier,SourceLoc>> ModuleID);
+    ModuleDecl *getModule(ArrayRef<std::pair<Identifier,SourceLoc>> ModuleID);
   };
-}
+} // end anonymous namespace
 
-Module *
+ModuleDecl *
 NameBinder::getModule(ArrayRef<std::pair<Identifier, SourceLoc>> modulePath) {
   assert(!modulePath.empty());
   auto moduleID = modulePath[0];
@@ -111,6 +113,24 @@ static bool isCompatibleImportKind(ImportKind expected, ImportKind actual) {
   case ImportKind::Func:
     return false;
   }
+
+  llvm_unreachable("Unhandled ImportKind in switch.");
+}
+
+static bool isNominalImportKind(ImportKind kind) {
+  switch (kind) {
+  case ImportKind::Module:
+    llvm_unreachable("module imports do not bring in decls");
+  case ImportKind::Struct:
+  case ImportKind::Class:
+  case ImportKind::Enum:
+  case ImportKind::Protocol:
+    return true;
+  case ImportKind::Type:
+  case ImportKind::Var:
+  case ImportKind::Func:
+    return false;
+  }
 }
 
 static const char *getImportKindString(ImportKind kind) {
@@ -132,6 +152,8 @@ static const char *getImportKindString(ImportKind kind) {
   case ImportKind::Func:
     return "func";
   }
+
+  llvm_unreachable("Unhandled ImportKind in switch.");
 }
 
 static bool shouldImportSelfImportClang(const ImportDecl *ID,
@@ -162,7 +184,7 @@ void NameBinder::addImport(
     return;
   }
 
-  Module *M = getModule(ID->getModulePath());
+  ModuleDecl *M = getModule(ID->getModulePath());
   if (!M) {
     SmallString<64> modulePathStr;
     interleave(ID->getModulePath(),
@@ -186,14 +208,20 @@ void NameBinder::addImport(
 
   ID->setModule(M);
 
-  Module *topLevelModule;
+  ModuleDecl *topLevelModule;
   if (ID->getModulePath().size() == 1) {
     topLevelModule = M;
   } else {
     // If we imported a submodule, import the top-level module as well.
     Identifier topLevelName = ID->getModulePath().front().first;
     topLevelModule = Context.getLoadedModule(topLevelName);
-    assert(topLevelModule && "top-level module missing");
+    if (!topLevelModule) {
+      // Clang can sometimes import top-level modules as if they were
+      // submodules.
+      assert(!M->getFiles().empty() &&
+             isa<ClangModuleUnit>(M->getFiles().front()));
+      topLevelModule = M;
+    }
   }
 
   auto *testableAttr = ID->getAttrs().getAttribute<TestableAttr>();
@@ -227,7 +255,10 @@ void NameBinder::addImport(
                    /*resolver*/nullptr, &SF);
 
     if (decls.empty()) {
-      diagnose(ID, diag::no_decl_in_module)
+      diagnose(ID, diag::decl_does_not_exist_in_module,
+               static_cast<unsigned>(ID->getImportKind()),
+               declPath.front().first,
+               ID->getModulePath().front().first)
         .highlight(SourceRange(declPath.front().second,
                                declPath.back().second));
       return;
@@ -244,16 +275,35 @@ void NameBinder::addImport(
         diagnose(next, diag::found_candidate);
 
     } else if (!isCompatibleImportKind(ID->getImportKind(), *actualKind)) {
-      diagnose(ID, diag::imported_decl_is_wrong_kind,
-               declPath.front().first,
-               getImportKindString(ID->getImportKind()),
-               static_cast<unsigned>(*actualKind))
-        .fixItReplace(SourceRange(ID->getKindLoc()),
-                      getImportKindString(*actualKind));
+      Optional<InFlightDiagnostic> emittedDiag;
+      if (*actualKind == ImportKind::Type &&
+          isNominalImportKind(ID->getImportKind())) {
+        assert(decls.size() == 1 &&
+               "if we start suggesting ImportKind::Type for, e.g., a mix of "
+               "structs and classes, we'll need a different message here");
+        assert(isa<TypeAliasDecl>(decls.front()) &&
+               "ImportKind::Type is only the best choice for a typealias");
+        auto *typealias = cast<TypeAliasDecl>(decls.front());
+        emittedDiag.emplace(diagnose(ID,
+            diag::imported_decl_is_wrong_kind_typealias,
+            typealias->getDescriptiveKind(),
+            NameAliasType::get(typealias, Type(), SubstitutionMap(),
+                                typealias->getUnderlyingTypeLoc().getType()),
+            getImportKindString(ID->getImportKind())));
+      } else {
+        emittedDiag.emplace(diagnose(ID, diag::imported_decl_is_wrong_kind,
+            declPath.front().first,
+            getImportKindString(ID->getImportKind()),
+            static_cast<unsigned>(*actualKind)));
+      }
+
+      emittedDiag->fixItReplace(SourceRange(ID->getKindLoc()),
+                                getImportKindString(*actualKind));
+      emittedDiag->flush();
 
       if (decls.size() == 1)
         diagnose(decls.front(), diag::decl_declared_here,
-                 decls.front()->getName());
+                 decls.front()->getFullName());
     }
   }
 }
@@ -279,6 +329,21 @@ static void insertOperatorDecl(NameBinder &Binder,
   Operators[OpDecl->getName()] = { OpDecl, true };
 }
 
+static void insertPrecedenceGroupDecl(NameBinder &binder, SourceFile &SF,
+                                      PrecedenceGroupDecl *group) {
+  auto previousDecl = SF.PrecedenceGroups.find(group->getName());
+  if (previousDecl != SF.PrecedenceGroups.end()) {
+    binder.diagnose(group->getLoc(), diag::precedence_group_redeclared);
+    binder.diagnose(previousDecl->second.getPointer(),
+                    diag::previous_precedence_group_decl);
+    return;
+  }
+
+  // FIXME: The second argument indicates whether the given precedence
+  // group is visible outside the current file.
+  SF.PrecedenceGroups[group->getName()] = { group, true };  
+}
+
 /// performNameBinding - Once parsing is complete, this walks the AST to
 /// resolve names and do other top-level validation.
 ///
@@ -286,6 +351,7 @@ static void insertOperatorDecl(NameBinder &Binder,
 /// nodes for unresolved value names, and we may have unresolved type names as
 /// well.  This handles import directives and forward references.
 void swift::performNameBinding(SourceFile &SF, unsigned StartElem) {
+  SharedTimer timer("Name binding");
   // Make sure we skip adding the standard library imports if the
   // source file is empty.
   if (SF.ASTStage == SourceFile::NameBound || SF.Decls.empty()) {
@@ -304,7 +370,7 @@ void swift::performNameBinding(SourceFile &SF, unsigned StartElem) {
   // Do a prepass over the declarations to find and load the imported modules
   // and map operator decls.
   for (auto D : llvm::makeArrayRef(SF.Decls).slice(StartElem)) {
-    if (ImportDecl *ID = dyn_cast<ImportDecl>(D)) {
+    if (auto *ID = dyn_cast<ImportDecl>(D)) {
       Binder.addImport(ImportedModules, ID);
     } else if (auto *OD = dyn_cast<PrefixOperatorDecl>(D)) {
       insertOperatorDecl(Binder, SF.PrefixOperators, OD);
@@ -312,14 +378,12 @@ void swift::performNameBinding(SourceFile &SF, unsigned StartElem) {
       insertOperatorDecl(Binder, SF.PostfixOperators, OD);
     } else if (auto *OD = dyn_cast<InfixOperatorDecl>(D)) {
       insertOperatorDecl(Binder, SF.InfixOperators, OD);
+    } else if (auto *PGD = dyn_cast<PrecedenceGroupDecl>(D)) {
+      insertPrecedenceGroupDecl(Binder, SF, PGD);
     }
   }
 
   SF.addImports(ImportedModules);
-
-  // FIXME: This algorithm has quadratic memory usage.  (In practice,
-  // import statements after the first "chunk" should be rare, though.)
-  // FIXME: Can we make this more efficient?
 
   SF.ASTStage = SourceFile::NameBound;
   verify(SF);

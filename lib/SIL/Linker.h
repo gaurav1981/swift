@@ -1,12 +1,12 @@
-//===--- Linker.h --------------------------------------------*- C++ -*----===//
+//===--- Linker.h -----------------------------------------------*- C++ -*-===//
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2015 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 
@@ -14,7 +14,6 @@
 #define SWIFT_SIL_LINKER_H
 
 #include "swift/SIL/SILDebugScope.h"
-#include "swift/SIL/SILExternalSource.h"
 #include "swift/SIL/SILVisitor.h"
 #include "swift/SIL/SILModule.h"
 #include "swift/Serialization/SerializedSILLoader.h"
@@ -32,8 +31,8 @@ class SILLinkerVisitor : public SILInstructionVisitor<SILLinkerVisitor, bool> {
   /// The SILLoader that this visitor is using to link.
   SerializedSILLoader *Loader;
 
-  /// The external SIL source to use when linking this module.
-  SILExternalSource *ExternalSource = nullptr;
+  /// Break cycles visiting recursive protocol conformances.
+  llvm::DenseSet<ProtocolConformance *> VisitedConformances;
 
   /// Worklist of SILFunctions we are processing.
   llvm::SmallVector<SILFunction *, 128> Worklist;
@@ -45,29 +44,14 @@ class SILLinkerVisitor : public SILInstructionVisitor<SILLinkerVisitor, bool> {
   /// The current linking mode.
   LinkingMode Mode;
 
-  /// The callback which is called each time a new function body is
-  /// deserialized.
-  std::function<void(SILFunction *)> Callback;
-
 public:
   SILLinkerVisitor(SILModule &M, SerializedSILLoader *L,
-                   SILModule::LinkingMode LinkingMode,
-                   SILExternalSource *E = nullptr,
-                   std::function<void(SILFunction *)> Callback =nullptr)
-      : Mod(M), Loader(L), ExternalSource(E), Worklist(),
-        FunctionDeserializationWorklist(), Mode(LinkingMode),
-        Callback(Callback) {}
+                   SILModule::LinkingMode LinkingMode)
+      : Mod(M), Loader(L), Worklist(), FunctionDeserializationWorklist(),
+        Mode(LinkingMode) {}
 
   /// Process F, recursively deserializing any thing F may reference.
   bool processFunction(SILFunction *F);
-
-  /// Process Name, recursively deserializing any thing function with name Name
-  /// may reference.
-  bool processFunction(StringRef Name);
-
-  /// Process Decl, recursively deserializing any thing that
-  /// the SILFunction corresponding to Decl may reference.
-  bool processDeclRef(SILDeclRef Decl);
 
   /// Deserialize the VTable mapped to C if it exists and all SIL the VTable
   /// transitively references.
@@ -77,13 +61,14 @@ public:
   SILVTable *processClassDecl(const ClassDecl *C);
 
   /// We do not want to visit callee functions if we just have a value base.
-  bool visitValueBase(ValueBase *V) { return false; }
+  bool visitSILInstruction(SILInstruction *I) { return false; }
 
   bool visitApplyInst(ApplyInst *AI);
   bool visitPartialApplyInst(PartialApplyInst *PAI);
   bool visitFunctionRefInst(FunctionRefInst *FRI);
-  bool visitProtocolConformance(ProtocolConformance *C,
+  bool visitProtocolConformance(ProtocolConformanceRef C,
                                 const Optional<SILDeclRef> &Member);
+  bool visitApplySubstitutions(const SubstitutionMap &subs);
   bool visitWitnessMethodInst(WitnessMethodInst *WMI) {
     return visitProtocolConformance(WMI->getConformance(), WMI->getMember());
   }

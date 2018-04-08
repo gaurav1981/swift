@@ -2,11 +2,11 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2015 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
-// See http://swift.org/LICENSE.txt for license information
-// See http://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
+// See https://swift.org/LICENSE.txt for license information
+// See https://swift.org/CONTRIBUTORS.txt for the list of Swift project authors
 //
 //===----------------------------------------------------------------------===//
 //
@@ -20,7 +20,7 @@
 #include "swift/SIL/SILModule.h"
 #include "swift/AST/Decl.h"
 #include "swift/AST/DiagnosticsSIL.h"
-#include "swift/Basic/Fallthrough.h"
+#include "swift/AST/ProtocolConformance.h"
 #include "clang/AST/DeclObjC.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -30,9 +30,8 @@ using namespace swift::Lowering;
 
 SILType TypeConverter::getLoweredTypeOfGlobal(VarDecl *var) {
   AbstractionPattern origType = getAbstractionPattern(var);
-  CanType swiftType = (origType.isOpaque() ? var->getType()->getCanonicalType()
-                                           : origType.getType());
-  return getLoweredType(origType, swiftType).getObjectType();
+  assert(!origType.isTypeParameter());
+  return getLoweredType(origType, origType.getType()).getObjectType();
 }
 
 CanType TypeConverter::getBridgedInputType(SILFunctionTypeRepresentation rep,
@@ -111,6 +110,7 @@ Type TypeConverter::getLoweredBridgedType(AbstractionPattern pattern,
   case SILFunctionTypeRepresentation::Thin:
   case SILFunctionTypeRepresentation::Method:
   case SILFunctionTypeRepresentation::WitnessMethod:
+  case SILFunctionTypeRepresentation::Closure:
     // No bridging needed for native CCs.
     return t;
   case SILFunctionTypeRepresentation::CFunctionPointer:
@@ -121,17 +121,18 @@ Type TypeConverter::getLoweredBridgedType(AbstractionPattern pattern,
     bool canBridgeBool = (rep == SILFunctionTypeRepresentation::ObjCMethod);
 
     // Look through optional types.
-    OptionalTypeKind optKind;
-    if (auto valueTy = t->getAnyOptionalObjectType(optKind)) {
+    if (auto valueTy = t->getOptionalObjectType()) {
       pattern = pattern.transformType([](CanType patternTy) {
-        return CanType(patternTy->getAnyOptionalObjectType());
+        return CanType(patternTy->getOptionalObjectType());
       });
       auto ty = getLoweredCBridgedType(pattern, valueTy, canBridgeBool, false);
-      return ty ? OptionalType::get(optKind, ty) : ty;
+      return ty ? OptionalType::get(ty) : ty;
     }
     return getLoweredCBridgedType(pattern, t, canBridgeBool,
                                   purpose == ForResult);
   }
+
+  llvm_unreachable("Unhandled SILFunctionTypeRepresentation in switch.");
 };
 
 Type TypeConverter::getLoweredCBridgedType(AbstractionPattern pattern,
@@ -139,15 +140,6 @@ Type TypeConverter::getLoweredCBridgedType(AbstractionPattern pattern,
                                            bool canBridgeBool,
                                            bool bridgedCollectionsAreOptional) {
   auto clangTy = pattern.isClangType() ? pattern.getClangType() : nullptr;
-
-  // Bridge String back to NSString.
-  auto nativeStringTy = getStringType();
-  if (nativeStringTy && t->isEqual(nativeStringTy)) {
-    Type bridgedTy = getNSStringType();
-    if (bridgedCollectionsAreOptional && clangTy)
-      bridgedTy = OptionalType::get(bridgedTy);
-    return bridgedTy;
-  }
 
   // Bridge Bool back to ObjC bool, unless the original Clang type was _Bool
   // or the Darwin Boolean type.
@@ -180,6 +172,10 @@ Type TypeConverter::getLoweredCBridgedType(AbstractionPattern pattern,
     }
   }
   
+  // `Any` can bridge to `AnyObject` (`id` in ObjC).
+  if (t->isAny())
+    return Context.getAnyObjectType();
+  
   if (auto funTy = t->getAs<FunctionType>()) {
     switch (funTy->getExtInfo().getSILRepresentation()) {
     // Functions that are already represented as blocks or C function pointers
@@ -190,6 +186,7 @@ Type TypeConverter::getLoweredCBridgedType(AbstractionPattern pattern,
     case SILFunctionType::Representation::Method:
     case SILFunctionType::Representation::ObjCMethod:
     case SILFunctionType::Representation::WitnessMethod:
+    case SILFunctionType::Representation::Closure:
       return t;
     case SILFunctionType::Representation::Thick: {
       // Thick functions (TODO: conditionally) get bridged to blocks.
@@ -212,34 +209,34 @@ Type TypeConverter::getLoweredCBridgedType(AbstractionPattern pattern,
     }
   }
 
-  // Array bridging.
-  if (auto arrayDecl = Context.getArrayDecl()) {
-    if (t->getAnyNominal() == arrayDecl) {
-      Type bridgedTy = getNSArrayType();
-      if (bridgedCollectionsAreOptional && clangTy)
-        bridgedTy = OptionalType::get(bridgedTy);
-      return bridgedTy;
-    }
+  auto foreignRepresentation =
+    t->getForeignRepresentableIn(ForeignLanguage::ObjectiveC, M.TheSwiftModule);
+  switch (foreignRepresentation.first) {
+  case ForeignRepresentableKind::None:
+  case ForeignRepresentableKind::Trivial:
+  case ForeignRepresentableKind::Object:
+    return t;
+
+  case ForeignRepresentableKind::Bridged:
+  case ForeignRepresentableKind::StaticBridged: {
+    auto conformance = foreignRepresentation.second;
+    assert(conformance && "Missing conformance?");
+    Type bridgedTy =
+      ProtocolConformanceRef::getTypeWitnessByName(
+        t, ProtocolConformanceRef(conformance),
+        M.getASTContext().Id_ObjectiveCType,
+        nullptr);
+    assert(bridgedTy && "Missing _ObjectiveCType witness?");
+    if (bridgedCollectionsAreOptional && clangTy)
+      bridgedTy = OptionalType::get(bridgedTy);
+    return bridgedTy;
   }
 
-  // Dictionary bridging.
-  if (auto dictDecl = Context.getDictionaryDecl()) {
-    if (t->getAnyNominal() == dictDecl) {
-      Type bridgedTy = getNSDictionaryType();
-      if (bridgedCollectionsAreOptional && clangTy)
-        bridgedTy = OptionalType::get(bridgedTy);
-      return bridgedTy;
-    }
+  case ForeignRepresentableKind::BridgedError: {
+    auto nsErrorDecl = M.getASTContext().getNSErrorDecl();
+    assert(nsErrorDecl && "Cannot bridge when NSError isn't available");
+    return nsErrorDecl->getDeclaredInterfaceType();
   }
-
-  // Set bridging.
-  if (auto setDecl = Context.getSetDecl()) {
-    if (t->getAnyNominal() == setDecl) {
-      Type bridgedTy = getNSSetType();
-      if (bridgedCollectionsAreOptional && clangTy)
-        bridgedTy = OptionalType::get(bridgedTy);
-      return bridgedTy;
-    }
   }
 
   return t;

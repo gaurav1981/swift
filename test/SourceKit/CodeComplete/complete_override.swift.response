@@ -2,6 +2,24 @@
   key.results: [
     {
       key.kind: source.lang.swift.keyword,
+      key.name: "__consuming",
+      key.sourcetext: "__consuming",
+      key.description: "__consuming",
+      key.typename: "",
+      key.context: source.codecompletion.context.none,
+      key.num_bytes_to_erase: 0
+    },
+    {
+      key.kind: source.lang.swift.keyword,
+      key.name: "associatedtype",
+      key.sourcetext: "associatedtype",
+      key.description: "associatedtype",
+      key.typename: "",
+      key.context: source.codecompletion.context.none,
+      key.num_bytes_to_erase: 0
+    },
+    {
+      key.kind: source.lang.swift.keyword,
       key.name: "class",
       key.sourcetext: "class",
       key.description: "class",
@@ -57,15 +75,22 @@
     {
       key.kind: source.lang.swift.decl.function.method.instance,
       key.name: "f(getMe a: Int, b: Double)",
-      key.sourcetext: "override func f(getMe a: Int, b: Double) {
-<#code#>
-}",
+      key.sourcetext: "override func f(getMe a: Int, b: Double) {\n<#code#>\n}",
       key.description: "f(getMe a: Int, b: Double)",
       key.typename: "",
       key.context: source.codecompletion.context.superclass,
       key.num_bytes_to_erase: 0,
-      key.associated_usrs: "s:FC17complete_override4Base1fFT5getMeSi1bSd_T_",
+      key.associated_usrs: "s:17complete_override4BaseC1f5getMe1bySi_SdtF",
       key.modulename: "complete_override"
+    },
+    {
+      key.kind: source.lang.swift.keyword,
+      key.name: "fileprivate",
+      key.sourcetext: "fileprivate",
+      key.description: "fileprivate",
+      key.typename: "",
+      key.context: source.codecompletion.context.none,
+      key.num_bytes_to_erase: 0
     },
     {
       key.kind: source.lang.swift.keyword,
@@ -96,6 +121,15 @@
     },
     {
       key.kind: source.lang.swift.keyword,
+      key.name: "indirect",
+      key.sourcetext: "indirect",
+      key.description: "indirect",
+      key.typename: "",
+      key.context: source.codecompletion.context.none,
+      key.num_bytes_to_erase: 0
+    },
+    {
+      key.kind: source.lang.swift.keyword,
       key.name: "infix",
       key.sourcetext: "infix",
       key.description: "infix",
@@ -115,14 +149,12 @@
     {
       key.kind: source.lang.swift.decl.function.constructor,
       key.name: "init()",
-      key.sourcetext: "init() {
-<#code#>
-}",
+      key.sourcetext: "override init() {\n<#code#>\n}",
       key.description: "init()",
       key.typename: "",
       key.context: source.codecompletion.context.superclass,
       key.num_bytes_to_erase: 0,
-      key.associated_usrs: "s:FC17complete_override4BasecFT_S0_",
+      key.associated_usrs: "s:17complete_override4BaseCACycfc",
       key.modulename: "complete_override"
     },
     {
@@ -181,6 +213,15 @@
     },
     {
       key.kind: source.lang.swift.keyword,
+      key.name: "open",
+      key.sourcetext: "open",
+      key.description: "open",
+      key.typename: "",
+      key.context: source.codecompletion.context.none,
+      key.num_bytes_to_erase: 0
+    },
+    {
+      key.kind: source.lang.swift.keyword,
       key.name: "operator",
       key.sourcetext: "operator",
       key.description: "operator",
@@ -211,6 +252,15 @@
       key.name: "postfix",
       key.sourcetext: "postfix",
       key.description: "postfix",
+      key.typename: "",
+      key.context: source.codecompletion.context.none,
+      key.num_bytes_to_erase: 0
+    },
+    {
+      key.kind: source.lang.swift.keyword,
+      key.name: "precedencegroup",
+      key.sourcetext: "precedencegroup",
+      key.description: "precedencegroup",
       key.typename: "",
       key.context: source.codecompletion.context.none,
       key.num_bytes_to_erase: 0
